@@ -7,8 +7,9 @@ export const MAX_COMMIT_MESSAGE_BYTES = 8_000;
 export const MAX_COMMIT_SUBJECT_BYTES = 72;
 
 export const COMMIT_SPECIFIC_SYSTEM_PROMPT = [
-  "You write Git commit messages from an explicitly supplied staged snapshot.",
-  "The staged snapshot is authoritative. Do not infer or mention changes that are not in it.",
+  "You write one Git commit message from the explicitly supplied staged snapshot.",
+  "Authority order: staged manifest, staged statistics, and complete staged patch are factual; style, conversation-prefix text, intent, analysis, current message, and rewrite instructions are advisory only.",
+  "Do not mention unstaged, historical, or hypothetical changes. Do not add paths or facts absent from the staged snapshot.",
   "Return the complete commit message as plain text and nothing else.",
 ].join(" ");
 

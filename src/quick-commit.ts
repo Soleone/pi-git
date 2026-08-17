@@ -1,14 +1,21 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
-import { GitService, snapshotMatches, type GitStagedSnapshot } from "./git-service.js";
+import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
+import { GitService, snapshotMatches } from "./git-service.js";
 import {
-  buildCommitMessageUserMessage,
-  COMMIT_SPECIFIC_SYSTEM_PROMPT,
-  MAX_COMMIT_DIFF_BYTES,
-  validateCommitResponse,
-} from "./commit-message.js";
+  captureStagedEvidence,
+  normalizeCommitIntent,
+  type CommitIntent,
+  type StagedEvidence,
+} from "./commit-evidence.js";
+import {
+  CommitMessageGenerator,
+  type CommitGenerationDiagnostics,
+  type CommitGenerationResult,
+  type CommitModelClient,
+} from "./commit-generator.js";
+import { MAX_COMMIT_DIFF_BYTES } from "./commit-message.js";
 import { QuickCommitStatus } from "./status-ui.js";
 
 export type QuickCommitState =
@@ -27,8 +34,8 @@ export type QuickCommitState =
 export interface QuickCommitModelRegistry {
   complete(
     model: Model<Api>,
-    context: Context,
-    options?: { signal?: AbortSignal },
+    context: { systemPrompt?: string; messages: Message[]; tools: [] },
+    options?: { signal?: AbortSignal; maxTokens?: number },
   ): Promise<AssistantMessage>;
   hasConfiguredAuth?(model: Model<Api>): boolean;
 }
@@ -48,6 +55,8 @@ export interface QuickCommitStartRequest {
   readonly status?: QuickCommitStatus;
   readonly maxDiffBytes?: number;
   readonly timeoutMs?: number;
+  /** Explicit intent is supported for callers that do not want implicit session history. */
+  readonly intent?: CommitIntent | string | undefined;
 }
 
 export type QuickCommitStartResult =
@@ -74,10 +83,10 @@ class QuickCommitTimedOut extends Error {
   }
 }
 
-class CommitMessageValidationError extends Error {
-  constructor(reason: string) {
+class CommitMessageGenerationError extends Error {
+  constructor(readonly code: string, reason: string) {
     super(`Generated commit message was rejected: ${reason}`);
-    this.name = "CommitMessageValidationError";
+    this.name = "CommitMessageGenerationError";
   }
 }
 
@@ -105,6 +114,7 @@ export class QuickCommitJob {
   private settle!: (state: QuickCommitState) => void;
   private readonly status: QuickCommitStatus;
   private subject = "";
+  private diagnosticsValue: CommitGenerationDiagnostics | undefined;
 
   constructor(private readonly request: QuickCommitStartRequest) {
     this.status = request.status ?? new QuickCommitStatus({
@@ -130,6 +140,10 @@ export class QuickCommitJob {
 
   get commitSubject(): string {
     return this.subject;
+  }
+
+  get generationDiagnostics(): CommitGenerationDiagnostics | undefined {
+    return this.diagnosticsValue;
   }
 
   wait(): Promise<QuickCommitState> {
@@ -173,22 +187,22 @@ export class QuickCommitJob {
         return;
       }
 
-      const staged = await this.awaitAbortable<GitStagedSnapshot>(this.request.git.stagedSnapshot(this.abortController.signal));
+      const staged = await this.awaitAbortable<StagedEvidence>(captureStagedEvidence(this.request.git, this.abortController.signal));
       const maxDiffBytes = this.request.maxDiffBytes ?? MAX_COMMIT_DIFF_BYTES;
-      const diffBytes = Buffer.byteLength(staged.diff, "utf8");
+      const diffBytes = staged.compactBytes;
       if (diffBytes > maxDiffBytes) {
-        throw new Error(`The staged diff is ${diffBytes.toLocaleString()} bytes, above the ${maxDiffBytes.toLocaleString()}-byte hard limit.`);
+        throw new Error(`The complete compact staged evidence is ${diffBytes.toLocaleString()} bytes, above the ${maxDiffBytes.toLocaleString()}-byte hard limit.`);
       }
 
       this.throwIfCancelled();
       this.transition("drafting");
-      const response = await this.completeMessage(staged.stat, staged.diff);
+      const generated = await this.completeMessage(staged);
+      if (!generated.ok) throw new CommitMessageGenerationError(generated.code, generated.reason);
 
       this.throwIfCancelled();
       this.transition("validating");
-      const validation = validateCommitResponse(response);
-      if (!validation.ok) throw new CommitMessageValidationError(validation.reason);
-      this.subject = validation.subject;
+      this.subject = generated.subject;
+      this.diagnosticsValue = generated.diagnostics;
 
       this.throwIfCancelled();
       this.finalizationStarted = true;
@@ -196,14 +210,14 @@ export class QuickCommitJob {
       this.clearDeadline();
 
       const current = await this.request.git.maybeSnapshot();
-      if (!snapshotMatches(staged, current)) {
+      if (!snapshotMatches(staged.snapshot, current)) {
         this.finish("stale");
         if (this.request.ui.isAlive()) this.status.stale();
         this.notify("Quick commit: the branch, HEAD, or index changed. Nothing was committed.", "warning");
         return;
       }
 
-      const temp = await createTemporaryMessageFile(validation.message);
+      const temp = await createTemporaryMessageFile(generated.message);
       let commitError: unknown;
       try {
         this.transition("committing");
@@ -232,17 +246,25 @@ export class QuickCommitJob {
     }
   }
 
-  private async completeMessage(stat: string, diff: string): Promise<AssistantMessage> {
-    const context: Context = {
-      systemPrompt: COMMIT_SPECIFIC_SYSTEM_PROMPT,
-      messages: [buildCommitMessageUserMessage(this.request.commitStyle, stat, diff)],
-      tools: [],
+  private async completeMessage(evidence: StagedEvidence): Promise<CommitGenerationResult> {
+    const client: CommitModelClient = {
+      complete: (model, context, options) => this.request.modelRegistry.complete(model, context, options),
     };
-    const promise = this.request.modelRegistry.complete(
-      this.request.model as Model<Api>,
-      context,
-      { signal: this.abortController.signal },
-    );
+    const generator = new CommitMessageGenerator(client);
+    const explicitIntent = typeof this.request.intent === "string"
+      ? normalizeCommitIntent(this.request.intent, "explicit")
+      : this.request.intent;
+    const promise = generator.generate({
+      model: this.request.model as Model<Api>,
+      evidence,
+      style: this.request.commitStyle,
+      ...(explicitIntent === undefined ? {} : { intent: explicitIntent }),
+      signal: this.abortController.signal,
+      onRoute: (route) => {
+        if (!this.request.ui.isAlive()) return;
+        this.status.route(route);
+      },
+    });
     return this.awaitAbortable(promise);
   }
 

@@ -93,6 +93,18 @@ export interface GitStagedSnapshot {
   readonly diff: string;
 }
 
+/** Raw, independently requested inputs used by the cost-aware commit planner. */
+export interface GitStagedEvidenceRaw {
+  readonly snapshot: GitMaybeSnapshot;
+  readonly stat: string;
+  readonly status: string;
+  readonly shortStat: string;
+  readonly nameStatus: string;
+  readonly numstat: string;
+  readonly contextPatch: string;
+  readonly compactPatch: string;
+}
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 /** How old a lock file must be before pi-git will remove it and retry. */
 const DEFAULT_LOCK_STALE_AFTER_MS = 15_000;
@@ -226,13 +238,69 @@ export class GitService {
     return result.stdout.trim();
   }
 
-  async stagedDiff(signal?: AbortSignal): Promise<string> {
+  async stagedShortStat(signal?: AbortSignal): Promise<string> {
     const result = await this.execGit(
-      ["diff", "--cached", "--no-ext-diff", "--no-color", "--binary", "--", "."],
-      "read staged diff",
-      { signal, timeout: 60_000 },
+      ["diff", "--cached", "--shortstat", "--no-color", "--", "."],
+      "read staged short stat",
+      { signal },
+    );
+    return result.stdout.trim();
+  }
+
+  async stagedNameStatus(signal?: AbortSignal): Promise<string> {
+    const result = await this.execGit(
+      ["diff", "--cached", "--name-status", "--find-renames", "--find-copies", "-z", "--", "."],
+      "read staged file manifest",
+      { signal },
     );
     return result.stdout;
+  }
+
+  async stagedNumstat(signal?: AbortSignal): Promise<string> {
+    const result = await this.execGit(
+      ["diff", "--cached", "--numstat", "--find-renames", "--find-copies", "-z", "--", "."],
+      "read staged line counts",
+      { signal },
+    );
+    return result.stdout;
+  }
+
+  async readStagedStatus(signal?: AbortSignal): Promise<string> {
+    const result = await this.execGit(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."],
+      "read staged status",
+      { signal },
+    );
+    return result.stdout;
+  }
+
+  async stagedDiff(signal?: AbortSignal): Promise<string> {
+    return this.stagedPatch(undefined, signal);
+  }
+
+  /** Read the staged patch with an explicit context width and no binary payload. */
+  async stagedPatch(unified?: number, signal?: AbortSignal): Promise<string> {
+    const args = ["diff", "--cached", "--no-ext-diff", "--no-color", "--find-renames", "--find-copies"];
+    if (unified !== undefined) args.push(`--unified=${unified}`);
+    args.push("--", ".");
+    const result = await this.execGit(args, "read staged diff", { signal, timeout: 60_000 });
+    return result.stdout;
+  }
+
+  /** Capture all cheap staged evidence and two independently generated patches. */
+  async stagedEvidence(signal?: AbortSignal): Promise<GitStagedEvidenceRaw> {
+    const [snapshot, stat, status, shortStat, nameStatus, numstat, contextPatch, compactPatch] = await Promise.all([
+      this.maybeSnapshot(signal),
+      this.stagedStat(signal),
+      this.readStagedStatus(signal),
+      this.stagedShortStat(signal),
+      this.stagedNameStatus(signal),
+      this.stagedNumstat(signal),
+      this.stagedPatch(1, signal),
+      this.stagedPatch(0, signal),
+    ]);
+    if (!snapshot.indexTree) throw new Error("The Git index contains unmerged entries.");
+    return { snapshot, stat, status, shortStat, nameStatus, numstat, contextPatch, compactPatch };
   }
 
   async readBranchRef(signal?: AbortSignal): Promise<string | undefined> {

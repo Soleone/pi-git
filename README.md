@@ -65,6 +65,8 @@ The v1 quick-commit policy rejects:
 
 The generated response must be a stopped, plain-text commit message with no tool calls, fences, NUL bytes, explanatory prefix, or overlong subject. It is written to a mode-`0600` temporary file and passed to `git commit --file`, so normal hooks run. The temporary file is removed even when Git or a hook fails.
 
+Commit generation is context-aware and fail-closed. pi-git captures a NUL-safe staged manifest, line counts, and complete `unified=1` and `unified=0` patches without binary payloads. It preflights the selected model's context window, output reserve, safety reserve, and a 512 KiB compact-evidence cap before making a request. Small changes use one fresh complete-diff request. Larger changes may reuse a warm active-session prefix with a small staged evidence packet; cold or unknown cache state falls back to complete compact evidence or one bounded analyst request followed by one final writer request. It never samples or silently truncates changed evidence.
+
 Before committing, pi-git compares the captured branch ref, `HEAD`, and index tree with a fresh snapshot. If one changed, the job reports a stale snapshot and leaves the current index intact.
 
 This check is deliberately not claimed to be perfectly atomic with a normal hook-running `git commit` process. An external Git process can still race the final check and commit. The v1 guarantee is only that pi-git aborts when it detects a branch, `HEAD`, or index-tree change before finalization.
@@ -78,7 +80,9 @@ Stale lock files (for example a leftover `index.lock` after a crash) are handled
 
 Manual and smart commits can create the repository's first commit.
 
-Neither workflow sends a user message or the full pi session context to generate the commit message. The model receives only `COMMIT.md`, staged stat, staged diff, and an instruction to return the final message.
+Smart commit may include at most two recent text-only user turns as bounded advisory intent. A warm cached-session route may reuse a bounded, sanitized prefix of recent text-only user and assistant messages, but never sends the full session, tool output, images, or slash-command text. Quick commit does not infer session intent while unattended; callers may provide explicit intent through the shared API. Git's staged manifest, stats, and complete patch always outrank style, conversation context, intent, and analyst interpretation.
+
+If the complete compact evidence cannot fit the analyst or final request, generation stops with an actionable error. Select a larger-context model or stage a smaller change instead of receiving a stat-only or partial draft.
 
 ## Commit style
 
@@ -104,6 +108,8 @@ src/
   register.ts
   git-service.ts
   commit-message.ts
+  commit-evidence.ts
+  commit-generator.ts
   quick-commit.ts
   shortcut-config.ts
   settings-dialog.ts

@@ -10,6 +10,7 @@ import {
   type GitExecResult,
   type GitExecutor,
 } from "../src/git-service.js";
+import { captureStagedEvidence } from "../src/commit-evidence.js";
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -115,6 +116,21 @@ describe("GitService", () => {
     expect(staged.head).toBeUndefined();
     expect(staged.diff).toContain("first.txt");
     expect(await service.fileDiff("first.txt")).toContain("first.txt");
+  });
+
+  it("captures complete context and compact evidence without binary payloads", async () => {
+    const directory = await createRepository();
+    await fs.writeFile(path.join(directory, "base.txt"), "changed\nwith context\n");
+    await fs.writeFile(path.join(directory, "binary file.bin"), Buffer.from([0, 1, 2, 3]));
+    await git(directory, ["add", "--", "."]);
+
+    const evidence = await captureStagedEvidence(new GitService(gitExec, directory));
+    expect(evidence.files.map((file) => file.path)).toEqual(["base.txt", "binary file.bin"]);
+    expect(evidence.contextPatch).toContain("+with context");
+    expect(evidence.compactPatch).toContain("+with context");
+    expect(evidence.compactPatch).toContain("Binary files");
+    expect(evidence.compactPatch).not.toContain("GIT binary patch");
+    expect(evidence.summary.binaryEntries).toBe(1);
   });
 
   it("captures renames and deletions without pathname quoting", async () => {

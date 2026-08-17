@@ -5,6 +5,8 @@ export type QuickCommitPhase =
   | "finalizing"
   | "committing";
 
+export type CommitGenerationRoute = "context" | "compact" | "cached-session" | "analyst-assisted";
+
 export interface StatusCallbacks {
   readonly setStatus: (value: string | undefined) => void;
   readonly notify: (message: string, level: "info" | "warning" | "error") => void;
@@ -24,6 +26,18 @@ export class QuickCommitStatus {
   private disposed = false;
 
   constructor(private readonly callbacks: StatusCallbacks) {}
+
+  route(route: CommitGenerationRoute): void {
+    if (this.disposed) return;
+    this.clearPendingTimer();
+    const labels: Record<CommitGenerationRoute, string> = {
+      context: "Quick commit: fresh diff",
+      compact: "Quick commit: compact diff",
+      "cached-session": "Quick commit: cached session",
+      "analyst-assisted": "Quick commit: analyzing diff",
+    };
+    this.callbacks.setStatus(labels[route]);
+  }
 
   phase(phase: QuickCommitPhase): void {
     if (this.disposed) return;

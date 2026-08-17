@@ -67,7 +67,7 @@ function response(message = "feat: update file"): AssistantMessage {
 }
 
 function selectedModel(): Model<Api> {
-  return { id: "test-model", name: "Test model", provider: "test", api: "openai-completions" } as Model<Api>;
+  return { id: "test-model", name: "Test model", provider: "test", api: "openai-completions", contextWindow: 128_000, maxTokens: 4_096 } as Model<Api>;
 }
 
 function surface(): QuickCommitUi {
