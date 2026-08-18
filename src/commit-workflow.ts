@@ -10,7 +10,6 @@ import {
 } from "./commit-generator.js";
 import { loadCommitStyle } from "./commit-message.js";
 import type { GitMaybeSnapshot, GitService } from "./git-service.js";
-import { PI_GIT_STATUS_ID } from "./status-ui.js";
 import { CommitEditor, type CommitEditorResult } from "./ui/commit-editor.js";
 const GENERATION_TIMEOUT_MS = 180_000;
 const MAX_CACHED_SESSION_MESSAGES = 16;
@@ -185,7 +184,6 @@ export class SmartCommitSession {
       return "cancelled";
     }
     if (staged.files.length === 0 && !(await git.hasStagedChanges())) {
-      clearSmartRouteStatus(ctx);
       ctx.ui.notify("Nothing is staged for commit.", "warning");
       return "cancelled";
     }
@@ -213,9 +211,7 @@ export class SmartCommitSession {
           session: reusableSession.session,
           cacheConfidence: reusableSession.cacheConfidence,
         }),
-        onRoute: (route) => setSmartRouteStatus(ctx, route),
       });
-      clearSmartRouteStatus(ctx);
       if (!generated) return "cancelled";
       if (!generated.ok) {
         ctx.ui.notify(formatGenerationFailure("Commit draft", generated), "error");
@@ -228,8 +224,6 @@ export class SmartCommitSession {
         cacheKey,
         diagnostics: generated.diagnostics,
       };
-      // The shared footer status warns that the generated draft still needs review.
-      setSmartDraftStatus(ctx, this.draft);
     }
 
     const draft = this.draft;
@@ -237,12 +231,11 @@ export class SmartCommitSession {
     const current = await git.maybeSnapshot();
     if (!snapshotEqual(draft.snapshot, current)) {
       this.draft = undefined;
-      clearSmartRouteStatus(ctx);
       ctx.ui.notify("The staged snapshot changed; the commit draft was discarded.", "warning");
       return "started";
     }
 
-    setSmartDraftStatus(ctx, draft);
+    notifySmartDraftReady(ctx, draft);
     const editorText = ctx.ui.getEditorText();
     try {
       const committed = await runManualCommit(pi, ctx, git, undefined, draft.message, draft.snapshot, (message) => {
@@ -250,7 +243,6 @@ export class SmartCommitSession {
       });
       if (committed) {
         this.draft = undefined;
-        clearSmartRouteStatus(ctx);
         return "committed";
       }
       return "cancelled";
@@ -307,9 +299,7 @@ async function rewriteMessage(
     style,
     ...(intent === undefined ? {} : { intent }),
     operation: { kind: "rewrite", currentMessage, instruction },
-    onRoute: (route) => setSmartRouteStatus(ctx, route),
   });
-  clearSmartRouteStatus(ctx);
   if (!generated) return undefined;
   if (!generated.ok) {
     ctx.ui.notify(formatGenerationFailure("Rewritten message", generated), "error");
@@ -501,33 +491,14 @@ function extractSmartIntent(ctx: ExtensionContext): CommitIntent | undefined {
   }
 }
 
-function setSmartRouteStatus(ctx: ExtensionContext, route: CommitRepresentation): void {
-  const setter = ctx.ui.setStatus;
-  if (typeof setter !== "function") return;
-  const labels = {
-    context: "Smart commit: fresh diff",
-    compact: "Smart commit: compact diff",
-    "cached-session": "Smart commit: cached session",
-    "analyst-assisted": "Smart commit: analyzing diff",
-  } as const;
-  setter(PI_GIT_STATUS_ID, labels[route]);
-}
-
-function setSmartDraftStatus(
+function notifySmartDraftReady(
   ctx: ExtensionContext,
   draft: { readonly message: string; readonly diagnostics: CommitGenerationDiagnostics },
 ): void {
-  const setter = ctx.ui.setStatus;
-  if (typeof setter !== "function") return;
-  setter(
-    PI_GIT_STATUS_ID,
-    `Smart commit: draft ready • algorithm: ${routeLabel(draft.diagnostics.route)} • review before committing`,
+  ctx.ui.notify(
+    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)}): ${firstLine(draft.message)}. Review before committing.`,
+    "info",
   );
-}
-
-function clearSmartRouteStatus(ctx: ExtensionContext): void {
-  const setter = ctx.ui.setStatus;
-  if (typeof setter === "function") setter(PI_GIT_STATUS_ID, undefined);
 }
 
 function routeLabel(route: CommitRepresentation): string {
