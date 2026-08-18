@@ -181,6 +181,7 @@ export class SmartCommitSession {
     | undefined;
 
   async run(pi: ExtensionAPI, ctx: ExtensionContext, git: GitService, commitStyle: string): Promise<"committed" | "cancelled" | "started"> {
+    ctx.ui.notify("Smart commit: started, generating draft...", "info");
     let staged: StagedEvidence;
     try {
       staged = await captureStagedEvidence(git);
