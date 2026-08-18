@@ -51,15 +51,12 @@ function fakeGit(options: {
   } as unknown as GitService;
 }
 
-function ui(): { ui: QuickCommitUi; statuses: Array<string | undefined>; notices: string[] } {
-  const statuses: Array<string | undefined> = [];
+function ui(): { ui: QuickCommitUi; notices: string[] } {
   const notices: string[] = [];
   return {
-    statuses,
     notices,
     ui: {
       isAlive: () => true,
-      setStatus: (value) => statuses.push(value),
       notify: (message) => notices.push(message),
     },
   };
@@ -132,14 +129,7 @@ describe("QuickCommitController", () => {
     await controller.job?.wait();
 
     expect(controller.state).toBe("succeeded");
-    expect(surface.statuses).toEqual(expect.arrayContaining([
-      "Quick commit: staging changes",
-      "Quick commit: drafting message",
-      "Quick commit: checking repository state",
-      "Quick commit: finalizing",
-      "Quick commit: committing",
-      "Quick commit:\n  feat: test state transitions",
-    ]));
+    expect(surface.notices).toContain("Quick commit:\n  feat: test state transitions");
     expect(temporaryPath).not.toBe("");
     await expect(fs.access(temporaryPath)).rejects.toThrow();
   });

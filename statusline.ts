@@ -56,8 +56,6 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
           const usage = ctx.getContextUsage();
           const percent = usage ? Math.min(100, Math.round(usage.percent ?? 0)) : 0;
           const elapsed = formatDuration(Date.now() - sessionStarted);
-          const statuses = [...footerData.getExtensionStatuses().values()];
-          const statusText = statuses.length > 0 ? ` ${statuses.join(" ")}` : "";
           const line = [
             theme.fg("muted", directory),
             theme.fg(dirty ? "warning" : "success", branchText),
@@ -65,7 +63,6 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
             theme.fg("dim", ` context ${percent}%`),
             theme.fg("dim", ` $${cost.toFixed(2)} ↑${compactNumber(inputTokens)} ↓${compactNumber(outputTokens)}`),
             theme.fg("dim", ` ${elapsed}`),
-            statusText,
           ].join("");
           return [truncateToWidth(line, width)];
         },

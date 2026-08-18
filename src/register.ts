@@ -3,7 +3,6 @@ import type { GitExecOptions, GitExecutor } from "./git-service.js";
 import { GitService } from "./git-service.js";
 import { loadCommitStyle } from "./commit-message.js";
 import { QuickCommitController, type QuickCommitUi } from "./quick-commit.js";
-import { PI_GIT_STATUS_ID, QuickCommitStatus } from "./status-ui.js";
 import {
   loadShortcutConfig,
   writeShortcutConfig,
@@ -22,7 +21,6 @@ export function registerPiGit(pi: ExtensionAPI): void {
   const quickCommits = new QuickCommitController();
   const smartCommit = new SmartCommitSession();
   let alive = true;
-  let activeStatus: QuickCommitStatus | undefined;
   let shortcutConfig: ShortcutConfig = shortcutLoad.config;
 
   const makeGit = (ctx: ExtensionContext): GitService => {
@@ -44,7 +42,6 @@ export function registerPiGit(pi: ExtensionAPI): void {
 
   const makeUi = (ctx: ExtensionContext): QuickCommitUi => ({
     isAlive: () => alive && ctx.mode === "tui",
-    setStatus: (value) => ctx.ui.setStatus(PI_GIT_STATUS_ID, value),
     notify: (message, level) => ctx.ui.notify(message, level),
   });
 
@@ -67,23 +64,13 @@ export function registerPiGit(pi: ExtensionAPI): void {
       return;
     }
 
-    if (quickCommits.job?.isSettled) {
-      activeStatus?.dispose();
-      activeStatus = undefined;
-    }
-    const status = new QuickCommitStatus({
-      setStatus: (value) => ctx.ui.setStatus(PI_GIT_STATUS_ID, value),
-      notify: (message, level) => ctx.ui.notify(message, level),
-    });
-    const result = quickCommits.start({
+    quickCommits.start({
       git: makeGit(ctx),
       modelRegistry: ctx.modelRegistry,
       model: ctx.model,
       commitStyle: loadCommitStyle(ctx.cwd),
       ui,
-      status,
     });
-    if (result.accepted) activeStatus = status;
   };
 
   pi.registerCommand("git", {
@@ -155,8 +142,6 @@ export function registerPiGit(pi: ExtensionAPI): void {
     alive = false;
     await quickCommits.shutdown();
     smartCommit.clear();
-    activeStatus?.dispose();
-    activeStatus = undefined;
   });
 }
 

@@ -73,7 +73,6 @@ function selectedModel(): Model<Api> {
 function surface(): QuickCommitUi {
   return {
     isAlive: () => true,
-    setStatus: () => undefined,
     notify: () => undefined,
   };
 }

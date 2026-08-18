@@ -67,7 +67,7 @@ Quick commit uses one extension-session job with these phases:
 staging -> drafting -> validating -> finalizing -> committing -> succeeded
 ```
 
-Cancellation works during staging, drafting, and validation. Once finalization starts, cancellation is rejected so a running Git commit and its hooks are not interrupted. Status is shown through pi's footer and failures remain visible until the next relevant action.
+Cancellation works during staging, drafting, and validation. Once finalization starts, cancellation is rejected so a running Git commit and its hooks are not interrupted. Quick-commit progress is kept out of the footer; results and failures are shown as notifications. When enabled in settings, pi-git's custom footer only renders repository and session statistics.
 
 The v1 quick-commit policy rejects:
 
@@ -128,7 +128,6 @@ src/
   quick-commit.ts
   shortcut-config.ts
   settings-dialog.ts
-  status-ui.ts
   commit-workflow.ts
   git-ui.ts
   ui/

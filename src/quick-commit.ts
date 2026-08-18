@@ -16,7 +16,6 @@ import {
   type CommitModelClient,
 } from "./commit-generator.js";
 import { MAX_COMMIT_DIFF_BYTES } from "./commit-message.js";
-import { QuickCommitStatus } from "./status-ui.js";
 
 export type QuickCommitState =
   | "idle"
@@ -42,7 +41,6 @@ export interface QuickCommitModelRegistry {
 
 export interface QuickCommitUi {
   readonly isAlive: () => boolean;
-  readonly setStatus: (value: string | undefined) => void;
   readonly notify: (message: string, level: "info" | "warning" | "error") => void;
 }
 
@@ -52,7 +50,6 @@ export interface QuickCommitStartRequest {
   readonly model?: Model<Api> | undefined;
   readonly commitStyle: string;
   readonly ui: QuickCommitUi;
-  readonly status?: QuickCommitStatus;
   readonly maxDiffBytes?: number;
   readonly timeoutMs?: number;
   /** Explicit intent is supported for callers that do not want implicit session history. */
@@ -112,15 +109,10 @@ export class QuickCommitJob {
   private settledValue = false;
   private readonly settledPromise: Promise<QuickCommitState>;
   private settle!: (state: QuickCommitState) => void;
-  private readonly status: QuickCommitStatus;
   private subject = "";
   private diagnosticsValue: CommitGenerationDiagnostics | undefined;
 
   constructor(private readonly request: QuickCommitStartRequest) {
-    this.status = request.status ?? new QuickCommitStatus({
-      setStatus: request.ui.setStatus,
-      notify: request.ui.notify,
-    });
     this.settledPromise = new Promise<QuickCommitState>((resolve) => {
       this.settle = resolve;
     });
@@ -176,13 +168,11 @@ export class QuickCommitJob {
       }
 
       this.transition("staging");
-      if (this.request.ui.isAlive()) this.status.checkingRepository();
       await this.request.git.assertSupportedRepository(this.abortController.signal);
       await this.awaitAbortable(this.request.git.stageAll(this.abortController.signal));
 
       if (!(await this.awaitAbortable(this.request.git.hasStagedChanges(this.abortController.signal)))) {
         this.finish("succeeded");
-        if (this.request.ui.isAlive()) this.status.clear();
         this.notify("Quick commit: no staged changes after staging.", "info");
         return;
       }
@@ -212,7 +202,6 @@ export class QuickCommitJob {
       const current = await this.request.git.maybeSnapshot();
       if (!snapshotMatches(staged.snapshot, current)) {
         this.finish("stale");
-        if (this.request.ui.isAlive()) this.status.stale();
         this.notify("Quick commit: the branch, HEAD, or index changed. Nothing was committed.", "warning");
         return;
       }
@@ -236,7 +225,6 @@ export class QuickCommitJob {
       if (commitError) throw commitError;
 
       this.finish("succeeded");
-      if (this.request.ui.isAlive()) this.status.success(this.subject);
       this.notify(`Quick commit:\n  ${this.subject}`, "info");
     } catch (error: unknown) {
       this.fail(error);
@@ -260,20 +248,12 @@ export class QuickCommitJob {
       style: this.request.commitStyle,
       ...(explicitIntent === undefined ? {} : { intent: explicitIntent }),
       signal: this.abortController.signal,
-      onRoute: (route) => {
-        if (!this.request.ui.isAlive()) return;
-        this.status.route(route);
-      },
     });
     return this.awaitAbortable(promise);
   }
 
   private transition(next: QuickCommitState): void {
     this.stateValue = next;
-    if (!this.request.ui.isAlive()) return;
-    if (next === "staging" || next === "drafting" || next === "validating" || next === "finalizing" || next === "committing") {
-      this.status.phase(next);
-    }
   }
 
   private finish(state: "succeeded" | "stale"): void {
@@ -286,7 +266,6 @@ export class QuickCommitJob {
 
     if (this.cancellationRequested || error instanceof QuickCommitCancelled || isAbortError(error)) {
       this.stateValue = "cancelled";
-      if (this.request.ui.isAlive()) this.status.cancelled();
       this.notify("Quick commit cancelled.", "info");
       this.resolveIfNeeded();
       return;
@@ -294,14 +273,12 @@ export class QuickCommitJob {
 
     if (this.timeoutRequested || error instanceof QuickCommitTimedOut) {
       this.stateValue = "timed_out";
-      if (this.request.ui.isAlive()) this.status.timedOut();
       this.notify("Quick commit timed out before finalization.", "error");
       this.resolveIfNeeded();
       return;
     }
 
     this.stateValue = "failed";
-    if (this.request.ui.isAlive()) this.status.failed();
     this.notify(formatFailure(error), "error");
     this.resolveIfNeeded();
   }

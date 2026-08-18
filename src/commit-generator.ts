@@ -39,7 +39,6 @@ export interface CommitModelClient {
 export interface CommitGenerationRequest extends CommitEvidenceRequest {
   readonly signal?: AbortSignal | undefined;
   readonly cacheConfidence?: CacheConfidence | undefined;
-  readonly onRoute?: ((route: CommitRepresentation) => void) | undefined;
 }
 
 export interface CommitUsageDiagnostics {
@@ -117,7 +116,6 @@ export class CommitMessageGenerator {
     }
 
     const route = routeForCandidate(selected);
-    request.onRoute?.(route);
     if (route === "analyst-assisted") {
       return this.generateWithAnalyst(request, evidenceRequest, plan, selected);
     }
