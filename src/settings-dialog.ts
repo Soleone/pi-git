@@ -9,6 +9,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import {
+  DEFAULT_CUSTOM_FOOTER,
   DEFAULT_SHORTCUTS,
   parseShortcut,
   type ShortcutAction,
@@ -20,15 +21,20 @@ export type SettingsDialogResult =
   | { readonly action: "cancel" }
   | { readonly action: "save"; readonly config: ShortcutConfig };
 
+type SettingId = ShortcutAction | "customFooter";
+
 const ACTIONS: ShortcutAction[] = ["openStatus", "quickCommit"];
-const LABELS: Record<ShortcutAction, string> = {
+const SETTINGS: SettingId[] = [...ACTIONS, "customFooter"];
+const LABELS: Record<SettingId, string> = {
   openStatus: "Open Git status",
   quickCommit: "Quick commit",
+  customFooter: "Custom footer",
 };
 
 export class ShortcutSettingsDialog implements Component, Focusable {
   private readonly input = new Input();
   private readonly values: Record<ShortcutAction, string>;
+  private customFooter: boolean;
   private selected = 0;
   private editing = false;
   private focusedValue = false;
@@ -45,6 +51,7 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       openStatus: initial.shortcuts.openStatus ?? "none",
       quickCommit: initial.shortcuts.quickCommit ?? "none",
     };
+    this.customFooter = initial.customFooter;
   }
 
   get focused(): boolean {
@@ -81,19 +88,26 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       return;
     }
     if (matchesKey(data, Key.up) || data === "k") {
-      this.selected = (this.selected - 1 + ACTIONS.length) % ACTIONS.length;
+      this.selected = (this.selected - 1 + SETTINGS.length) % SETTINGS.length;
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.down) || data === "j") {
-      this.selected = (this.selected + 1) % ACTIONS.length;
+      this.selected = (this.selected + 1) % SETTINGS.length;
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.enter)) {
-      this.startEditing();
+      const setting = SETTINGS[this.selected];
+      if (setting === "customFooter") {
+        this.customFooter = !this.customFooter;
+        this.invalidate();
+        this.tui.requestRender();
+      } else {
+        this.startEditing();
+      }
       return;
     }
     if (matchesKey(data, Key.ctrl("s"))) {
@@ -101,14 +115,19 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       return;
     }
     if (data === "r") {
-      const action = ACTIONS[this.selected];
-      if (action) this.values[action] = DEFAULT_SHORTCUTS[action];
+      const setting = SETTINGS[this.selected];
+      if (setting === "customFooter") {
+        this.customFooter = DEFAULT_CUSTOM_FOOTER;
+      } else if (setting) {
+        this.values[setting] = DEFAULT_SHORTCUTS[setting];
+      }
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.shift("r"))) {
       for (const action of ACTIONS) this.values[action] = DEFAULT_SHORTCUTS[action];
+      this.customFooter = DEFAULT_CUSTOM_FOOTER;
       this.invalidate();
       this.tui.requestRender();
     }
@@ -117,7 +136,7 @@ export class ShortcutSettingsDialog implements Component, Focusable {
   render(width: number): string[] {
     const lines = [
       truncateToWidth(` ${this.theme.fg("accent", this.theme.bold("pi-git settings"))}`, width),
-      truncateToWidth(this.theme.fg("dim", "Configure the two global shortcuts. Changes apply after reload."), width),
+      truncateToWidth(this.theme.fg("dim", "Configure global shortcuts and the optional footer. Changes apply after reload."), width),
       truncateToWidth(this.theme.fg("borderMuted", "─".repeat(Math.max(0, width))), width),
     ];
     if (this.errorMessage) lines.push(truncateToWidth(this.theme.fg("error", ` ${this.errorMessage}`), width));
@@ -129,15 +148,17 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       lines.push(...this.input.render(width));
       lines.push(truncateToWidth(this.theme.fg("dim", " enter accept • esc cancel"), width));
     } else {
-      for (let index = 0; index < ACTIONS.length; index += 1) {
-        const action = ACTIONS[index];
-        if (!action) continue;
+      for (let index = 0; index < SETTINGS.length; index += 1) {
+        const setting = SETTINGS[index];
+        if (!setting) continue;
         const marker = index === this.selected ? this.theme.fg("accent", "→ ") : "  ";
-        const value = this.values[action] || "none";
-        lines.push(truncateToWidth(`${marker}${LABELS[action]}: ${value}`, width));
+        const value = setting === "customFooter"
+          ? this.customFooter ? "enabled" : "disabled"
+          : this.values[setting] || "none";
+        lines.push(truncateToWidth(`${marker}${LABELS[setting]}: ${value}`, width));
       }
       lines.push(truncateToWidth(this.theme.fg("borderMuted", "─".repeat(Math.max(0, width))), width));
-      lines.push(truncateToWidth(this.theme.fg("dim", " ↑↓ select • enter edit • ctrl+s save • r reset selected • shift+r reset all • esc cancel"), width));
+      lines.push(truncateToWidth(this.theme.fg("dim", " ↑↓ select • enter edit/toggle • ctrl+s save • r reset selected • shift+r reset all • esc cancel"), width));
     }
     return lines;
   }
@@ -151,8 +172,8 @@ export class ShortcutSettingsDialog implements Component, Focusable {
   }
 
   private startEditing(): void {
-    const action = ACTIONS[this.selected];
-    if (!action) return;
+    const action = SETTINGS[this.selected];
+    if (!action || action === "customFooter") return;
     this.editing = true;
     this.input.setValue(this.values[action]);
     this.input.focused = this.focusedValue;
@@ -186,6 +207,7 @@ export class ShortcutSettingsDialog implements Component, Focusable {
     const config: ShortcutConfig = {
       version: 1,
       shortcuts: { openStatus: openStatus.value, quickCommit: quickCommit.value },
+      customFooter: this.customFooter,
     };
     const diagnostics = validateShortcutConfig(config);
     if (diagnostics.errors.length > 0) {

@@ -7,6 +7,7 @@ export const DEFAULT_SHORTCUTS = {
   openStatus: "ctrl+\\",
   quickCommit: "alt+g",
 } as const;
+export const DEFAULT_CUSTOM_FOOTER = false;
 
 export type ShortcutAction = keyof typeof DEFAULT_SHORTCUTS;
 export type ShortcutValue = KeyId | undefined;
@@ -14,6 +15,7 @@ export type ShortcutValue = KeyId | undefined;
 export interface ShortcutConfig {
   readonly version: 1;
   readonly shortcuts: Readonly<Record<ShortcutAction, ShortcutValue>>;
+  readonly customFooter: boolean;
 }
 
 export interface ShortcutDiagnostics {
@@ -124,6 +126,10 @@ export function parseShortcutConfig(raw: unknown): {
   if (value.shortcuts !== undefined && !isRecord(value.shortcuts)) {
     errors.push("The shortcuts field must be an object.");
   }
+  const customFooter = value.customFooter === undefined ? DEFAULT_CUSTOM_FOOTER : value.customFooter;
+  if (typeof customFooter !== "boolean") {
+    errors.push("The customFooter field must be a boolean.");
+  }
 
   const shortcuts: Record<ShortcutAction, ShortcutValue> = {
     openStatus: undefined,
@@ -161,7 +167,11 @@ export function parseShortcutConfig(raw: unknown): {
   }
 
   return {
-    config: { version: 1, shortcuts },
+    config: {
+      version: 1,
+      shortcuts,
+      customFooter: typeof customFooter === "boolean" ? customFooter : DEFAULT_CUSTOM_FOOTER,
+    },
     diagnostics: { warnings, errors, duplicates },
   };
 }
@@ -186,7 +196,7 @@ export function loadShortcutConfig(
       break;
     } catch (error: unknown) {
       if (isFileNotFound(error)) continue;
-      warnings.push(`Could not read ${candidate}; using default pi-git shortcuts.`);
+      warnings.push(`Could not read ${candidate}; using default pi-git settings.`);
       break;
     }
   }
@@ -195,7 +205,7 @@ export function loadShortcutConfig(
   warnings.push(...parsed.diagnostics.warnings);
   errors.push(...parsed.diagnostics.errors);
   if (errors.length > 0) {
-    warnings.push(...errors.map((error) => `Invalid pi-git shortcut configuration: ${error}`));
+    warnings.push(...errors.map((error) => `Invalid pi-git configuration: ${error}`));
   }
 
   return {
@@ -215,6 +225,7 @@ export function validateShortcutConfig(config: ShortcutConfig): ShortcutDiagnost
       openStatus: config.shortcuts.openStatus ?? "none",
       quickCommit: config.shortcuts.quickCommit ?? "none",
     },
+    customFooter: config.customFooter,
   }).diagnostics;
 }
 
@@ -238,6 +249,7 @@ export function writeShortcutConfig(
       openStatus: config.shortcuts.openStatus ?? "none",
       quickCommit: config.shortcuts.quickCommit ?? "none",
     },
+    customFooter: config.customFooter,
   };
 
   let descriptor: number | undefined;
@@ -272,6 +284,7 @@ export function resetShortcut(config: ShortcutConfig, action: ShortcutAction): S
       ...config.shortcuts,
       [action]: defaultShortcutValue(action),
     },
+    customFooter: config.customFooter,
   };
 }
 
@@ -282,6 +295,7 @@ export function resetAllShortcuts(): ShortcutConfig {
       openStatus: defaultShortcutValue("openStatus"),
       quickCommit: defaultShortcutValue("quickCommit"),
     },
+    customFooter: DEFAULT_CUSTOM_FOOTER,
   };
 }
 
@@ -290,6 +304,7 @@ export function shortcutHelp(config: ShortcutConfig): string[] {
   return [
     `Open Git status: ${format(config.shortcuts.openStatus)}`,
     `Quick commit: ${format(config.shortcuts.quickCommit)}`,
+    `Custom footer: ${config.customFooter ? "enabled" : "disabled"}`,
   ];
 }
 

@@ -2,7 +2,8 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-export function registerStatusline(pi: ExtensionAPI): void {
+export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
+  if (!enabled) return;
   const sessionStarted = Date.now();
   let dirty = false;
   let inputTokens = 0;

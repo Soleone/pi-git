@@ -23,7 +23,7 @@ Every command uses the `/git*` namespace:
 | `/git-smart-commit` | Generate a reviewable commit draft and open the manual editor. |
 | `/git-quick-commit` | Stage all changes, generate a message, validate the snapshot, and commit in the background. |
 | `/git-quick-commit cancel` | Cancel an active quick-commit job before finalization. |
-| `/git-settings` | Configure the two pi-git global shortcuts. |
+| `/git-settings` | Configure pi-git's global shortcuts and custom footer. |
 
 The old `/branch`, `/commit`, `/smartcommit`, and `/quickcommit` names are not registered.
 
@@ -44,7 +44,20 @@ The manual commit editor keeps these fixed shortcuts:
 | `Ctrl+R` | Rewrite the message. |
 | `Ctrl+G` | Run Graphite create-and-commit. |
 
-Use `/git-settings` to change or disable the two global bindings. Accepted values include `ctrl+shift+g`, `alt+g`, `escape`, `delete`, `none`, and an empty value. Settings are stored atomically at `$PI_CODING_AGENT_DIR/pi-git.json`, falling back to `~/.pi/agent/pi-git.json`. A reload is required and is performed automatically after saving.
+Use `/git-settings` to change or disable the two global bindings and to enable or disable pi-git's custom footer. Accepted shortcut values include `ctrl+shift+g`, `alt+g`, `escape`, `delete`, `none`, and an empty value. Select **Custom footer** and press Enter to toggle it. The footer is disabled by default.
+
+Settings are stored atomically at `$PI_CODING_AGENT_DIR/pi-git.json`, falling back to `~/.pi/agent/pi-git.json`. A reload is required and is performed automatically after saving. The equivalent file setting is `"customFooter": false`:
+
+```json
+{
+  "version": 1,
+  "shortcuts": {
+    "openStatus": "ctrl+\\",
+    "quickCommit": "alt+g"
+  },
+  "customFooter": false
+}
+```
 
 ## Quick commit safety
 

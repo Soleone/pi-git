@@ -18,7 +18,7 @@ import { registerStatusline } from "../statusline.js";
 const shortcutLoad = loadShortcutConfig();
 
 export function registerPiGit(pi: ExtensionAPI): void {
-  registerStatusline(pi);
+  registerStatusline(pi, shortcutLoad.config.customFooter);
   const quickCommits = new QuickCommitController();
   const smartCommit = new SmartCommitSession();
   let alive = true;
@@ -134,7 +134,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("git-settings", {
-    description: "Configure pi-git's global keyboard shortcuts",
+    description: "Configure pi-git's shortcuts and custom footer",
     handler: async (_args, ctx) => {
       if (!requireTui(ctx)) return;
       await openSettings(ctx, quickCommits, shortcutConfig, makeUi(ctx));
@@ -147,7 +147,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
     alive = true;
     for (const warning of shortcutLoad.warnings) ctx.ui.notify(warning, "warning");
     if (shortcutLoad.warnings.length > 0) {
-      ctx.ui.notify("Run /git-settings to review pi-git shortcuts.", "info");
+      ctx.ui.notify("Run /git-settings to review pi-git settings.", "info");
     }
   });
 
@@ -176,9 +176,9 @@ async function openSettings(
   if (!ready) return;
   try {
     const target = writeShortcutConfig(result.config);
-    ctx.ui.notify(`Saved pi-git shortcuts to ${target}; reloading.`, "info");
+    ctx.ui.notify(`Saved pi-git settings to ${target}; reloading.`, "info");
   } catch (error: unknown) {
-    ctx.ui.notify(`Could not save pi-git shortcuts: ${error instanceof Error ? error.message : String(error)}`, "error");
+    ctx.ui.notify(`Could not save pi-git settings: ${error instanceof Error ? error.message : String(error)}`, "error");
     return;
   }
   await ctx.reload();

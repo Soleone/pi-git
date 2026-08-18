@@ -48,6 +48,15 @@ describe("shortcut configuration", () => {
     const defaults = parseShortcutConfig({}).config;
     expect(defaults.shortcuts.openStatus).toBe(DEFAULT_SHORTCUTS.openStatus);
     expect(defaults.shortcuts.quickCommit).toBe(DEFAULT_SHORTCUTS.quickCommit);
+    expect(defaults.customFooter).toBe(false);
+  });
+
+  it("parses an optional custom footer setting", () => {
+    expect(parseShortcutConfig({ customFooter: false }).config.customFooter).toBe(false);
+
+    const invalid = parseShortcutConfig({ customFooter: "no" });
+    expect(invalid.config.customFooter).toBe(false);
+    expect(invalid.diagnostics.errors.join(" ")).toContain("customFooter");
   });
 
   it("rejects invalid values while retaining a usable default", () => {
@@ -62,6 +71,7 @@ describe("shortcut configuration", () => {
     const config: ShortcutConfig = {
       version: 1,
       shortcuts: { openStatus: "ctrl+shift+g", quickCommit: undefined },
+      customFooter: false,
     };
     const target = writeShortcutConfig(config, { PI_CODING_AGENT_DIR: directory }, directory);
     expect(target).toBe(path.join(directory, "pi-git.json"));
@@ -69,6 +79,7 @@ describe("shortcut configuration", () => {
     expect(loaded.sourcePath).toBe(target);
     expect(loaded.config.shortcuts.openStatus).toBe("ctrl+shift+g");
     expect(loaded.config.shortcuts.quickCommit).toBeUndefined();
+    expect(loaded.config.customFooter).toBe(false);
     expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
     expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
@@ -77,9 +88,16 @@ describe("shortcut configuration", () => {
     const custom: ShortcutConfig = {
       version: 1,
       shortcuts: { openStatus: "ctrl+shift+g", quickCommit: undefined },
+      customFooter: false,
     };
     expect(resetShortcut(custom, "openStatus").shortcuts.openStatus).toBe(DEFAULT_SHORTCUTS.openStatus);
+    expect(resetShortcut(custom, "openStatus").customFooter).toBe(false);
     expect(resetAllShortcuts().shortcuts.quickCommit).toBe(DEFAULT_SHORTCUTS.quickCommit);
-    expect(shortcutHelp(custom)).toEqual(["Open Git status: ctrl+shift+g", "Quick commit: disabled"]);
+    expect(resetAllShortcuts().customFooter).toBe(false);
+    expect(shortcutHelp(custom)).toEqual([
+      "Open Git status: ctrl+shift+g",
+      "Quick commit: disabled",
+      "Custom footer: disabled",
+    ]);
   });
 });
