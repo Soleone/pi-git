@@ -225,7 +225,7 @@ export class QuickCommitJob {
       if (commitError) throw commitError;
 
       this.finish("succeeded");
-      this.notify(`Quick commit:\n  ${this.subject}`, "info");
+      this.notify(`Git committed\n  ${this.subject}`, "info");
     } catch (error: unknown) {
       this.fail(error);
     } finally {
@@ -387,6 +387,7 @@ export class QuickCommitController {
     const job = new QuickCommitJob(request);
     this.current = job;
     job.start();
+    this.notify(request.ui, "Git committing...", "info");
     return { accepted: true, job };
   }
 

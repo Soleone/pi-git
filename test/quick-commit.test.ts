@@ -85,6 +85,7 @@ describe("QuickCommitController", () => {
     });
 
     expect(started.accepted).toBe(true);
+    expect(surface.notices).toContain("Git committing...");
     await tick();
     expect(controller.state).toBe("drafting");
     expect(controller.job?.isSettled).toBe(false);
@@ -129,7 +130,7 @@ describe("QuickCommitController", () => {
     await controller.job?.wait();
 
     expect(controller.state).toBe("succeeded");
-    expect(surface.notices).toContain("Quick commit:\n  feat: test state transitions");
+    expect(surface.notices).toContain("Git committed\n  feat: test state transitions");
     expect(temporaryPath).not.toBe("");
     await expect(fs.access(temporaryPath)).rejects.toThrow();
   });
