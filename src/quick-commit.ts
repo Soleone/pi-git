@@ -237,7 +237,7 @@ export class QuickCommitJob {
 
       this.finish("succeeded");
       if (this.request.ui.isAlive()) this.status.success(this.subject);
-      this.notify(`Quick commit: committed ${this.subject}`, "info");
+      this.notify(`Quick commit: committed → ${this.subject}`, "info");
     } catch (error: unknown) {
       this.fail(error);
     } finally {
