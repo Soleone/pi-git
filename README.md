@@ -19,6 +19,7 @@ Every command uses the `/git*` namespace:
 | `/git` | Open the interactive staging view. |
 | `/git-branch` | Switch, create, push, pull, or delete a branch. |
 | `/git-commit [message]` | Open the manual commit editor or commit the supplied message. |
+| `/git-amend` | Edit and amend the latest commit message without changing its content. |
 | `/git-smart-commit` | Generate a reviewable commit draft and open the manual editor. |
 | `/git-quick-commit` | Stage all changes, generate a message, validate the snapshot, and commit in the background. |
 | `/git-quick-commit cancel` | Cancel an active quick-commit job before finalization. |
@@ -76,6 +77,7 @@ Stale lock files (for example a leftover `index.lock` after a crash) are handled
 ## Smart versus quick commit
 
 - `/git-smart-commit` is reviewable. It generates a draft, preserves it when the editor is closed, and lets you edit or cancel before committing.
+- `/git-amend` edits the latest commit message and uses `git commit --amend --only`, so staged changes are left staged rather than accidentally included. It asks for confirmation when the latest commit is present in a remote ref.
 - `/git-quick-commit` is automatic. It stages all changes, generates and validates a message without replacing the main editor, and commits after the snapshot check. It intentionally does not handle an unborn repository.
 
 Manual and smart commits can create the repository's first commit.

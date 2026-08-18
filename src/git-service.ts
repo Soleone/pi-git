@@ -382,6 +382,32 @@ export class GitService {
     );
   }
 
+  async headCommitMessage(signal?: AbortSignal): Promise<string> {
+    const result = await this.execGit(
+      ["show", "--quiet", "--format=%B", "HEAD"],
+      "read latest commit message",
+      { signal },
+    );
+    return result.stdout.trim();
+  }
+
+  async headCommitIsPushed(signal?: AbortSignal): Promise<boolean> {
+    const result = await this.execGitAllowFailure(
+      ["branch", "--remotes", "--contains", "HEAD"],
+      "check whether latest commit is pushed",
+      { signal },
+    );
+    return result.code === 0 && result.stdout.trim().length > 0;
+  }
+
+  async amendMessage(message: string, signal?: AbortSignal): Promise<void> {
+    await this.execGit(
+      ["commit", "--amend", "--only", "--message", message],
+      "amend latest commit",
+      { timeout: 120_000, signal },
+    );
+  }
+
   async discardPath(entry: GitStatusEntry, signal?: AbortSignal): Promise<void> {
     if (entry.index === "?" && entry.worktree === "?") {
       await this.execGit(["clean", "-fd", "--", entry.path], "discard untracked file", { signal });

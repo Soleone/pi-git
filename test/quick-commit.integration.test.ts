@@ -8,7 +8,7 @@ import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { initTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { GitService, type GitExecutor } from "../src/git-service.js";
 import { QuickCommitController, type QuickCommitModelRegistry, type QuickCommitUi } from "../src/quick-commit.js";
-import { runManualCommit, SmartCommitSession } from "../src/commit-workflow.js";
+import { runAmendCommit, runManualCommit, SmartCommitSession } from "../src/commit-workflow.js";
 
 const execFileAsync = promisify(execFile);
 const directories: string[] = [];
@@ -97,6 +97,25 @@ describe("quick commit temporary-repository integration", () => {
     expect(await runManualCommit({} as ExtensionAPI, context, new GitService(executor, cwd), "feat: first commit")).toBe(true);
     expect((await git(cwd, ["log", "-1", "--pretty=%s"])).trim()).toBe("feat: first commit");
     expect(notifications).toContain("Committed feat: first commit");
+  });
+
+  it("edits the latest commit message without including staged changes", async () => {
+    const cwd = await repository();
+    await fs.writeFile(path.join(cwd, "file.txt"), "staged but not amended\n");
+    await git(cwd, ["add", "--", "file.txt"]);
+    const notifications: string[] = [];
+    const context = {
+      ui: {
+        notify: (message: string) => notifications.push(message),
+        custom: async () => ({ action: "commit", message: "docs: renamed latest commit" }),
+      },
+    } as unknown as ExtensionContext;
+
+    expect(await runAmendCommit(context, new GitService(executor, cwd))).toBe(true);
+    expect((await git(cwd, ["log", "-1", "--pretty=%s"])).trim()).toBe("docs: renamed latest commit");
+    expect((await git(cwd, ["show", "HEAD:file.txt"])).trim()).toBe("before");
+    expect((await git(cwd, ["diff", "--cached", "--name-only"])).trim()).toBe("file.txt");
+    expect(notifications).toContain("Amended docs: renamed latest commit");
   });
 
   it("generates and commits a smart first commit in an unborn repository", async () => {

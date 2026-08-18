@@ -12,7 +12,7 @@ import {
 } from "./shortcut-config.js";
 import { ShortcutSettingsDialog, type SettingsDialogResult } from "./settings-dialog.js";
 import { openBranchManager, openGitStatus } from "./git-ui.js";
-import { runManualCommit, SmartCommitSession } from "./commit-workflow.js";
+import { runAmendCommit, runManualCommit, SmartCommitSession } from "./commit-workflow.js";
 import { registerStatusline } from "../statusline.js";
 
 const QUICK_STATUS_ID = "pi-git-quick-commit";
@@ -108,6 +108,14 @@ export function registerPiGit(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       if (!requireTui(ctx)) return;
       await runManualCommit(pi, ctx, makeGit(ctx), args.trim() || undefined);
+    },
+  });
+
+  pi.registerCommand("git-amend", {
+    description: "Edit and amend the latest Git commit message",
+    handler: async (_args, ctx) => {
+      if (!requireTui(ctx)) return;
+      await runAmendCommit(ctx, makeGit(ctx));
     },
   });
 

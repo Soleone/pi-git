@@ -90,6 +90,77 @@ export async function runManualCommit(
   }
 }
 
+export async function runAmendCommit(
+  ctx: ExtensionContext,
+  git: GitService,
+): Promise<boolean> {
+  let originalMessage: string;
+  let originalHead: string | undefined;
+  try {
+    originalHead = await git.readHead();
+    if (!originalHead) {
+      ctx.ui.notify("There is no commit to amend.", "warning");
+      return false;
+    }
+    originalMessage = await git.headCommitMessage();
+  } catch (error: unknown) {
+    ctx.ui.notify(formatError(error), "error");
+    return false;
+  }
+
+  try {
+    if (await git.headCommitIsPushed()) {
+      const confirmed = await ctx.ui.confirm(
+        "Amend pushed commit?",
+        "The latest commit is present on a remote. Amending it will rewrite history. Continue?",
+      );
+      if (!confirmed) {
+        ctx.ui.notify("Amend cancelled.", "info");
+        return false;
+      }
+    }
+  } catch (error: unknown) {
+    ctx.ui.notify(formatError(error), "error");
+    return false;
+  }
+
+  let message = originalMessage;
+  while (true) {
+    const editorResult = await ctx.ui.custom<CommitEditorResult | undefined>(
+      (tui, theme, _keybindings, done) => new CommitEditor(
+        tui,
+        theme,
+        "",
+        message,
+        done,
+        { heading: "Amend commit message", allowRewrite: false, allowGraphite: false },
+      ),
+    );
+    if (!editorResult || editorResult.action === "cancel") {
+      ctx.ui.notify("Amend cancelled.", "info");
+      return false;
+    }
+    message = editorResult.message;
+    if (!message) {
+      ctx.ui.notify("Commit message is empty.", "warning");
+      continue;
+    }
+
+    if (await git.readHead() !== originalHead) {
+      ctx.ui.notify("HEAD changed while editing; nothing was amended.", "warning");
+      return false;
+    }
+    try {
+      await git.amendMessage(message);
+      ctx.ui.notify(`Amended ${firstLine(message)}`, "info");
+      return true;
+    } catch (error: unknown) {
+      ctx.ui.notify(formatError(error), "error");
+      return false;
+    }
+  }
+}
+
 export class SmartCommitSession {
   private draft:
     | {

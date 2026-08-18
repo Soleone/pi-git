@@ -14,9 +14,16 @@ export interface CommitEditorResult {
   readonly message: string;
 }
 
+export interface CommitEditorOptions {
+  readonly heading?: string;
+  readonly allowRewrite?: boolean;
+  readonly allowGraphite?: boolean;
+}
+
 export class CommitEditor implements Component, Focusable {
   private readonly editor: Editor;
   private focusedValue = false;
+  private readonly options: Required<CommitEditorOptions>;
 
   constructor(
     private readonly tui: TUI,
@@ -24,7 +31,13 @@ export class CommitEditor implements Component, Focusable {
     private readonly stagedStat: string,
     prefill: string,
     private readonly done: (result: CommitEditorResult) => void,
+    options: CommitEditorOptions = {},
   ) {
+    this.options = {
+      heading: options.heading ?? "Commit message",
+      allowRewrite: options.allowRewrite ?? true,
+      allowGraphite: options.allowGraphite ?? true,
+    };
     this.editor = new Editor(
       tui,
       {
@@ -66,11 +79,11 @@ export class CommitEditor implements Component, Focusable {
       return;
     }
     if (matchesKey(data, Key.ctrl("r"))) {
-      this.done({ action: "rewrite", message: this.message() });
+      if (this.options.allowRewrite) this.done({ action: "rewrite", message: this.message() });
       return;
     }
     if (matchesKey(data, Key.ctrl("g"))) {
-      this.done({ action: "graphite", message: this.message() });
+      if (this.options.allowGraphite) this.done({ action: "graphite", message: this.message() });
       return;
     }
     if (matchesKey(data, Key.enter)) {
@@ -86,7 +99,7 @@ export class CommitEditor implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    const lines: string[] = [truncateToWidth(` ${this.theme.fg("accent", this.theme.bold("Commit message"))}`, width)];
+    const lines: string[] = [truncateToWidth(` ${this.theme.fg("accent", this.theme.bold(this.options.heading))}`, width)];
     this.editor.focused = this.focusedValue;
     lines.push(...this.editor.render(width));
     if (this.stagedStat) {
@@ -96,7 +109,11 @@ export class CommitEditor implements Component, Focusable {
       }
     }
     lines.push(truncateToWidth(this.theme.fg("borderMuted", "─".repeat(Math.max(0, width))), width));
-    lines.push(truncateToWidth(this.theme.fg("dim", " enter newline • ctrl+s commit • ctrl+r rewrite • ctrl+g Graphite • esc cancel"), width));
+    const actions = ["enter newline", "ctrl+s save"];
+    if (this.options.allowRewrite) actions.push("ctrl+r rewrite");
+    if (this.options.allowGraphite) actions.push("ctrl+g Graphite");
+    actions.push("esc cancel");
+    lines.push(truncateToWidth(this.theme.fg("dim", ` ${actions.join(" • ")}`), width));
     return lines;
   }
 

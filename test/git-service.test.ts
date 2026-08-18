@@ -133,6 +133,21 @@ describe("GitService", () => {
     expect(evidence.summary.binaryEntries).toBe(1);
   });
 
+  it("amends only the latest message and leaves staged changes intact", async () => {
+    const directory = await createRepository();
+    await fs.writeFile(path.join(directory, "base.txt"), "staged change\n");
+    const service = new GitService(gitExec, directory);
+    await service.stageAll();
+
+    expect(await service.headCommitMessage()).toBe("chore: initial");
+    expect(await service.headCommitIsPushed()).toBe(false);
+    await service.amendMessage("docs: rename commit");
+
+    expect((await git(directory, ["log", "-1", "--pretty=%s"])).stdout.trim()).toBe("docs: rename commit");
+    expect((await git(directory, ["show", "HEAD:base.txt"])).stdout).toBe("base\n");
+    expect((await git(directory, ["diff", "--cached", "--name-only"])).stdout.trim()).toBe("base.txt");
+  });
+
   it("captures renames and deletions without pathname quoting", async () => {
     const directory = await createRepository();
     expect((await git(directory, ["mv", "--", "base.txt", "renamed file.txt"])).code).toBe(0);
