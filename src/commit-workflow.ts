@@ -23,6 +23,7 @@ export async function runManualCommit(
   prefill = "",
   expectedSnapshot?: GitMaybeSnapshot,
   onMessageChange?: (message: string) => void,
+  onEditorReady?: () => void,
 ): Promise<boolean> {
   let staged: StagedEvidence;
   try {
@@ -43,7 +44,11 @@ export async function runManualCommit(
   let message = prefill;
   while (true) {
     const editorResult = await ctx.ui.custom<CommitEditorResult | undefined>(
-      (tui, theme, _keybindings, done) => new CommitEditor(tui, theme, staged.stat, message, done),
+      (tui, theme, _keybindings, done) => {
+        const editor = new CommitEditor(tui, theme, staged.stat, message, done);
+        if (onEditorReady) queueMicrotask(onEditorReady);
+        return editor;
+      },
     );
     if (!editorResult || editorResult.action === "cancel") {
       ctx.ui.notify("Commit cancelled.", "info");
@@ -235,12 +240,20 @@ export class SmartCommitSession {
       return "started";
     }
 
-    notifySmartDraftReady(ctx, draft);
     const editorText = ctx.ui.getEditorText();
     try {
-      const committed = await runManualCommit(pi, ctx, git, undefined, draft.message, draft.snapshot, (message) => {
-        if (this.draft) this.draft = { ...this.draft, message };
-      });
+      const committed = await runManualCommit(
+        pi,
+        ctx,
+        git,
+        undefined,
+        draft.message,
+        draft.snapshot,
+        (message) => {
+          if (this.draft) this.draft = { ...this.draft, message };
+        },
+        () => notifySmartDraftReady(ctx, this.draft ?? draft),
+      );
       if (committed) {
         this.draft = undefined;
         return "committed";
