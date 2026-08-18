@@ -1,3 +1,5 @@
+export const PI_GIT_STATUS_ID = "pi-git-quick-commit";
+
 export type QuickCommitPhase =
   | "staging"
   | "drafting"

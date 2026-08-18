@@ -10,9 +10,8 @@ import {
 } from "./commit-generator.js";
 import { loadCommitStyle } from "./commit-message.js";
 import type { GitMaybeSnapshot, GitService } from "./git-service.js";
+import { PI_GIT_STATUS_ID } from "./status-ui.js";
 import { CommitEditor, type CommitEditorResult } from "./ui/commit-editor.js";
-
-const SMART_STATUS_ID = "pi-git-smart-commit";
 const GENERATION_TIMEOUT_MS = 180_000;
 const MAX_CACHED_SESSION_MESSAGES = 16;
 const MAX_CACHED_SESSION_BYTES = 32 * 1024;
@@ -229,9 +228,8 @@ export class SmartCommitSession {
         cacheKey,
         diagnostics: generated.diagnostics,
       };
+      // The shared footer status warns that the generated draft still needs review.
       setSmartDraftStatus(ctx, this.draft);
-      const intentLabel = generated.intentIncluded ? ", recent intent included" : "";
-      ctx.ui.notify(`Commit draft ready (${routeLabel(generated.representation)}${intentLabel}): ${generated.subject}`, "info");
     }
 
     const draft = this.draft;
@@ -512,7 +510,7 @@ function setSmartRouteStatus(ctx: ExtensionContext, route: CommitRepresentation)
     "cached-session": "Smart commit: cached session",
     "analyst-assisted": "Smart commit: analyzing diff",
   } as const;
-  setter(SMART_STATUS_ID, labels[route]);
+  setter(PI_GIT_STATUS_ID, labels[route]);
 }
 
 function setSmartDraftStatus(
@@ -522,14 +520,14 @@ function setSmartDraftStatus(
   const setter = ctx.ui.setStatus;
   if (typeof setter !== "function") return;
   setter(
-    SMART_STATUS_ID,
-    `Smart commit: draft ready, review before committing (algorithm: ${routeLabel(draft.diagnostics.route)}): ${firstLine(draft.message)}`,
+    PI_GIT_STATUS_ID,
+    `Smart commit: draft ready • algorithm: ${routeLabel(draft.diagnostics.route)} • review before committing`,
   );
 }
 
 function clearSmartRouteStatus(ctx: ExtensionContext): void {
   const setter = ctx.ui.setStatus;
-  if (typeof setter === "function") setter(SMART_STATUS_ID, undefined);
+  if (typeof setter === "function") setter(PI_GIT_STATUS_ID, undefined);
 }
 
 function routeLabel(route: CommitRepresentation): string {

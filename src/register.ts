@@ -3,7 +3,7 @@ import type { GitExecOptions, GitExecutor } from "./git-service.js";
 import { GitService } from "./git-service.js";
 import { loadCommitStyle } from "./commit-message.js";
 import { QuickCommitController, type QuickCommitUi } from "./quick-commit.js";
-import { QuickCommitStatus } from "./status-ui.js";
+import { PI_GIT_STATUS_ID, QuickCommitStatus } from "./status-ui.js";
 import {
   loadShortcutConfig,
   writeShortcutConfig,
@@ -15,7 +15,6 @@ import { openBranchManager, openGitStatus } from "./git-ui.js";
 import { runAmendCommit, runManualCommit, SmartCommitSession } from "./commit-workflow.js";
 import { registerStatusline } from "../statusline.js";
 
-const QUICK_STATUS_ID = "pi-git-quick-commit";
 const shortcutLoad = loadShortcutConfig();
 
 export function registerPiGit(pi: ExtensionAPI): void {
@@ -45,7 +44,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
 
   const makeUi = (ctx: ExtensionContext): QuickCommitUi => ({
     isAlive: () => alive && ctx.mode === "tui",
-    setStatus: (value) => ctx.ui.setStatus(QUICK_STATUS_ID, value),
+    setStatus: (value) => ctx.ui.setStatus(PI_GIT_STATUS_ID, value),
     notify: (message, level) => ctx.ui.notify(message, level),
   });
 
@@ -73,7 +72,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
       activeStatus = undefined;
     }
     const status = new QuickCommitStatus({
-      setStatus: (value) => ctx.ui.setStatus(QUICK_STATUS_ID, value),
+      setStatus: (value) => ctx.ui.setStatus(PI_GIT_STATUS_ID, value),
       notify: (message, level) => ctx.ui.notify(message, level),
     });
     const result = quickCommits.start({
