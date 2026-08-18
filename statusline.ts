@@ -65,6 +65,7 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
           const branch = footerData.getGitBranch();
           const branchText = branch ? `⎇ ${branch}${dirty ? "*" : ""}` : "no-git";
           const model = ctx.model?.name || ctx.model?.id || "no-model";
+          const provider = ctx.model?.provider || "no-provider";
           const usage = ctx.getContextUsage();
           const percent = usage ? Math.min(100, Math.max(0, Math.round(usage.percent ?? 0))) : 0;
           const elapsed = formatDuration(Date.now() - sessionStarted);
@@ -74,6 +75,7 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
             theme.fg("muted", directory),
             theme.fg(dirty ? "warning" : "success", `  ${branchText}`),
             theme.fg("accent", `  ${model}`),
+            theme.fg("dim", ` ${provider}`),
             theme.fg("dim", context),
             theme.fg("dim", `  $${cost.toFixed(2)} ↑${compactNumber(inputTokens)} ↓${compactNumber(outputTokens)}`),
             theme.fg("dim", `  ${elapsed} ${clock}`),

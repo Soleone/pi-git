@@ -43,6 +43,7 @@ describe("registerStatusline", () => {
     ) => { render: (width: number) => string[] };
 
     const handlers = new Map<string, Handler>();
+    const themed: Array<{ color: string; text: string }> = [];
     let footerFactory: FooterFactory | undefined;
     const pi = {
       on: (event: string, handler: Handler) => {
@@ -56,7 +57,7 @@ describe("registerStatusline", () => {
     if (!sessionStart) throw new Error("session_start handler was not registered");
     await sessionStart({}, {
       cwd: "/workspace/project",
-      model: { id: "test-model", name: "Friendly model" },
+      model: { id: "test-model", name: "Friendly model", provider: "test-provider" },
       sessionManager: { getBranch: () => [] },
       getContextUsage: () => ({ percent: 34 }),
       ui: {
@@ -69,7 +70,10 @@ describe("registerStatusline", () => {
     if (!footerFactory) throw new Error("custom footer was not registered");
     const footer = footerFactory(
       { requestRender: () => undefined },
-      { fg: (_color, text) => text },
+      { fg: (color, text) => {
+        themed.push({ color, text });
+        return text;
+      } },
       {
         getGitBranch: () => "main",
         getExtensionStatuses: () => new Map([["pi-git-quick-commit", "Quick commit: hidden"]]),
@@ -81,6 +85,9 @@ describe("registerStatusline", () => {
 
     expect(plainRendered).toContain("⎇ main");
     expect(plainRendered).toContain("Friendly model");
+    expect(plainRendered).toContain("test-provider");
+    expect(themed).toContainEqual({ color: "accent", text: "  Friendly model" });
+    expect(themed).toContainEqual({ color: "dim", text: " test-provider" });
     expect(plainRendered).toContain("▰▰▰▱▱▱▱▱▱▱ 34%");
     expect(rendered).toContain("\x1b[38;2;0;255;0m▰");
     expect(rendered).toContain("\x1b[38;2;102;255;0m▰");
