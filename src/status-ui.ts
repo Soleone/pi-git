@@ -56,7 +56,7 @@ export class QuickCommitStatus {
   success(subject: string): void {
     if (this.disposed) return;
     this.clearPendingTimer();
-    this.callbacks.setStatus(`Quick commit: committed → ${subject}`);
+    this.callbacks.setStatus(`Quick commit:\n  ${subject}`);
     this.clearTimer = setTimeout(() => {
       this.clearTimer = undefined;
       if (!this.disposed) this.callbacks.setStatus(undefined);

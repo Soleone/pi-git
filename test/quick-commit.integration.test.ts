@@ -115,7 +115,7 @@ describe("quick commit temporary-repository integration", () => {
     expect((await git(cwd, ["log", "-1", "--pretty=%s"])).trim()).toBe("docs: renamed latest commit");
     expect((await git(cwd, ["show", "HEAD:file.txt"])).trim()).toBe("before");
     expect((await git(cwd, ["diff", "--cached", "--name-only"])).trim()).toBe("file.txt");
-    expect(notifications).toContain("Amended → docs: renamed latest commit");
+    expect(notifications).toContain("Amended\n  docs: renamed latest commit");
   });
 
   it("generates and commits a smart first commit in an unborn repository", async () => {

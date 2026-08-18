@@ -138,7 +138,7 @@ describe("QuickCommitController", () => {
       "Quick commit: checking repository state",
       "Quick commit: finalizing",
       "Quick commit: committing",
-      "Quick commit: committed → feat: test state transitions",
+      "Quick commit:\n  feat: test state transitions",
     ]));
     expect(temporaryPath).not.toBe("");
     await expect(fs.access(temporaryPath)).rejects.toThrow();

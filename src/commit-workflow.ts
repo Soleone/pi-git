@@ -79,7 +79,7 @@ export async function runManualCommit(
         const root = await git.root();
         const result = await pi.exec("gt", ["create", "--message", message, "--no-interactive"], { cwd: root, timeout: 120_000 });
         if (result.code === 0) {
-          ctx.ui.notify(`Graphite committed → ${firstLine(message)}`, "info");
+          ctx.ui.notify(`Graphite committed\n  ${firstLine(message)}`, "info");
           return true;
         }
         ctx.ui.notify(`Graphite failed: ${result.stderr || result.stdout}`, "error");
@@ -160,7 +160,7 @@ export async function runAmendCommit(
     }
     try {
       await git.amendMessage(message);
-      ctx.ui.notify(`Amended → ${firstLine(message)}`, "info");
+      ctx.ui.notify(`Amended\n  ${firstLine(message)}`, "info");
       return true;
     } catch (error: unknown) {
       ctx.ui.notify(formatError(error), "error");
@@ -510,7 +510,7 @@ function notifySmartDraftReady(
   draft: { readonly message: string; readonly diagnostics: CommitGenerationDiagnostics },
 ): void {
   ctx.ui.notify(
-    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)}) → ${firstLine(draft.message)} (review before committing)`,
+    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)})\n  ${firstLine(draft.message)}\nReview before committing`,
     "info",
   );
 }
