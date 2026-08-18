@@ -133,7 +133,12 @@ export async function runAmendCommit(
         "",
         message,
         done,
-        { heading: "Amend commit message", allowRewrite: false, allowGraphite: false },
+        {
+          heading: "Amend commit message",
+          allowRewrite: false,
+          allowGraphite: false,
+          cursorAtStart: true,
+        },
       ),
     );
     if (!editorResult || editorResult.action === "cancel") {
@@ -181,6 +186,7 @@ export class SmartCommitSession {
       return "cancelled";
     }
     if (staged.files.length === 0 && !(await git.hasStagedChanges())) {
+      clearSmartRouteStatus(ctx);
       ctx.ui.notify("Nothing is staged for commit.", "warning");
       return "cancelled";
     }
@@ -223,6 +229,7 @@ export class SmartCommitSession {
         cacheKey,
         diagnostics: generated.diagnostics,
       };
+      setSmartDraftStatus(ctx, this.draft);
       const intentLabel = generated.intentIncluded ? ", recent intent included" : "";
       ctx.ui.notify(`Commit draft ready (${routeLabel(generated.representation)}${intentLabel}): ${generated.subject}`, "info");
     }
@@ -232,10 +239,12 @@ export class SmartCommitSession {
     const current = await git.maybeSnapshot();
     if (!snapshotEqual(draft.snapshot, current)) {
       this.draft = undefined;
+      clearSmartRouteStatus(ctx);
       ctx.ui.notify("The staged snapshot changed; the commit draft was discarded.", "warning");
       return "started";
     }
 
+    setSmartDraftStatus(ctx, draft);
     const editorText = ctx.ui.getEditorText();
     try {
       const committed = await runManualCommit(pi, ctx, git, undefined, draft.message, draft.snapshot, (message) => {
@@ -243,6 +252,7 @@ export class SmartCommitSession {
       });
       if (committed) {
         this.draft = undefined;
+        clearSmartRouteStatus(ctx);
         return "committed";
       }
       return "cancelled";
@@ -503,6 +513,18 @@ function setSmartRouteStatus(ctx: ExtensionContext, route: CommitRepresentation)
     "analyst-assisted": "Smart commit: analyzing diff",
   } as const;
   setter(SMART_STATUS_ID, labels[route]);
+}
+
+function setSmartDraftStatus(
+  ctx: ExtensionContext,
+  draft: { readonly message: string; readonly diagnostics: CommitGenerationDiagnostics },
+): void {
+  const setter = ctx.ui.setStatus;
+  if (typeof setter !== "function") return;
+  setter(
+    SMART_STATUS_ID,
+    `Smart commit: draft ready, review before committing (algorithm: ${routeLabel(draft.diagnostics.route)}): ${firstLine(draft.message)}`,
+  );
 }
 
 function clearSmartRouteStatus(ctx: ExtensionContext): void {

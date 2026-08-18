@@ -18,6 +18,7 @@ export interface CommitEditorOptions {
   readonly heading?: string;
   readonly allowRewrite?: boolean;
   readonly allowGraphite?: boolean;
+  readonly cursorAtStart?: boolean;
 }
 
 export class CommitEditor implements Component, Focusable {
@@ -37,6 +38,7 @@ export class CommitEditor implements Component, Focusable {
       heading: options.heading ?? "Commit message",
       allowRewrite: options.allowRewrite ?? true,
       allowGraphite: options.allowGraphite ?? true,
+      cursorAtStart: options.cursorAtStart ?? false,
     };
     this.editor = new Editor(
       tui,
@@ -54,6 +56,7 @@ export class CommitEditor implements Component, Focusable {
     );
     this.editor.disableSubmit = true;
     this.editor.setText(prefill);
+    if (this.options.cursorAtStart) this.moveCursorToStart();
     this.editor.onChange = () => {
       this.invalidate();
       this.tui.requestRender();
@@ -119,6 +122,13 @@ export class CommitEditor implements Component, Focusable {
 
   invalidate(): void {
     this.editor.invalidate();
+  }
+
+  private moveCursorToStart(): void {
+    // Editor.setText() places the cursor at the end. Move up through wrapped
+    // lines until the first logical line, then move to that line's start.
+    while (this.editor.getCursor().line > 0) this.editor.handleInput("\x1b[A");
+    this.editor.handleInput("\x1b[H");
   }
 
   private message(): string {
