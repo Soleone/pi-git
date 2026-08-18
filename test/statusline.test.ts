@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerStatusline } from "../statusline.js";
 
 describe("registerStatusline", () => {
@@ -56,9 +56,9 @@ describe("registerStatusline", () => {
     if (!sessionStart) throw new Error("session_start handler was not registered");
     await sessionStart({}, {
       cwd: "/workspace/project",
-      model: { id: "test-model" },
+      model: { id: "test-model", name: "Friendly model" },
       sessionManager: { getBranch: () => [] },
-      getContextUsage: () => undefined,
+      getContextUsage: () => ({ percent: 34 }),
       ui: {
         setFooter: (factory: unknown) => {
           footerFactory = factory as FooterFactory;
@@ -77,12 +77,79 @@ describe("registerStatusline", () => {
       },
     );
     const rendered = footer.render(200).join("\n");
+    const plainRendered = rendered.replace(/\x1b\[[0-9;]*m/g, "");
 
-    expect(rendered).toContain("main");
+    expect(plainRendered).toContain("⎇ main");
+    expect(plainRendered).toContain("Friendly model");
+    expect(plainRendered).toContain("▰▰▰▱▱▱▱▱▱▱ 34%");
+    expect(rendered).toContain("\x1b[38;2;0;255;0m▰");
+    expect(rendered).toContain("\x1b[38;2;102;255;0m▰");
+    expect(rendered).toContain("\x1b[38;2;100;100;100m▱");
+    expect(rendered).not.toContain("\x1b[38;2;255;0;0m▰");
+    expect(rendered).toMatch(/\b\d{2}:\d{2}\b/);
     expect(rendered).not.toContain("Quick commit");
 
     const sessionShutdown = handlers.get("session_shutdown");
     if (!sessionShutdown) throw new Error("session_shutdown handler was not registered");
     await sessionShutdown({});
+  });
+
+  it("requests a render when periodic git status changes", async () => {
+    vi.useFakeTimers();
+    try {
+      type Handler = (...args: unknown[]) => unknown;
+      type FooterFactory = (
+        tui: { requestRender: () => void },
+        theme: { fg: (color: string, text: string) => string },
+        footerData: {
+          getGitBranch: () => string | null;
+          onBranchChange: (handler: () => void) => () => void;
+        },
+      ) => { render: (width: number) => string[] };
+
+      const handlers = new Map<string, Handler>();
+      let footerFactory: FooterFactory | undefined;
+      let stdout = "";
+      let renders = 0;
+      const pi = {
+        on: (event: string, handler: Handler) => {
+          handlers.set(event, handler);
+        },
+        exec: async () => ({ stdout, stderr: "", code: 0 }),
+      } as unknown as ExtensionAPI;
+
+      registerStatusline(pi, true);
+      const sessionStart = handlers.get("session_start");
+      if (!sessionStart) throw new Error("session_start handler was not registered");
+      await sessionStart({}, {
+        cwd: "/workspace/project",
+        model: { id: "test-model" },
+        sessionManager: { getBranch: () => [] },
+        getContextUsage: () => undefined,
+        ui: {
+          setFooter: (factory: unknown) => {
+            footerFactory = factory as FooterFactory;
+          },
+        },
+      });
+
+      if (!footerFactory) throw new Error("custom footer was not registered");
+      footerFactory(
+        { requestRender: () => { renders += 1; } },
+        { fg: (_color, text) => text },
+        { getGitBranch: () => "main", onBranchChange: () => () => undefined },
+      );
+
+      stdout = " M changed\\0";
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(renders).toBe(1);
+
+      const sessionShutdown = handlers.get("session_shutdown");
+      if (!sessionShutdown) throw new Error("session_shutdown handler was not registered");
+      await sessionShutdown({});
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
