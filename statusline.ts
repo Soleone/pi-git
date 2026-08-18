@@ -7,6 +7,7 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
   let sessionStarted = Date.now();
   let dirty = false;
   let inputTokens = 0;
+  let cacheReadTokens = 0;
   let outputTokens = 0;
   let cost = 0;
   let dirtyTimer: ReturnType<typeof setInterval> | undefined;
@@ -28,11 +29,13 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
 
   const refreshUsage = (ctx: { sessionManager: { getBranch: () => readonly unknown[] } }): void => {
     inputTokens = 0;
+    cacheReadTokens = 0;
     outputTokens = 0;
     cost = 0;
     for (const entry of ctx.sessionManager.getBranch()) {
       if (!isAssistantEntry(entry)) continue;
       inputTokens += entry.message.usage.input;
+      cacheReadTokens += entry.message.usage.cacheRead;
       outputTokens += entry.message.usage.output;
       cost += entry.message.usage.cost.total;
     }
@@ -79,6 +82,9 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
             theme.fg("dim", "  ") +
               theme.fg("muted", "$") +
               theme.fg("dim", cost.toFixed(2)) +
+              theme.fg("dim", " ") +
+              theme.fg("muted", "⚡") +
+              theme.fg("dim", compactNumber(cacheReadTokens)) +
               theme.fg("dim", " ") +
               theme.fg("muted", "↑") +
               theme.fg("dim", compactNumber(inputTokens)) +

@@ -58,7 +58,15 @@ describe("registerStatusline", () => {
     await sessionStart({}, {
       cwd: "/workspace/project",
       model: { id: "test-model", name: "Friendly model", provider: "test-provider" },
-      sessionManager: { getBranch: () => [] },
+      sessionManager: {
+        getBranch: () => [{
+          type: "message",
+          message: {
+            role: "assistant",
+            usage: { input: 1_200, cacheRead: 3_400, output: 600, cost: { total: 0.25 } },
+          },
+        }],
+      },
       getContextUsage: () => ({ percent: 34 }),
       ui: {
         setFooter: (factory: unknown) => {
@@ -90,8 +98,9 @@ describe("registerStatusline", () => {
     expect(themed).toContainEqual({ color: "dim", text: " test-provider" });
     expect(themed).toContainEqual({ color: "muted", text: "$" });
     expect(themed).toContainEqual({ color: "muted", text: "↑" });
+    expect(themed).toContainEqual({ color: "muted", text: "⚡" });
     expect(themed).toContainEqual({ color: "muted", text: "↓" });
-    expect(plainRendered).toContain("$0.00 ↑0 ↓0  00m00s");
+    expect(plainRendered).toContain("$0.25 ⚡3.4k ↑1.2k ↓600  00m00s");
     expect(plainRendered).toContain("▰▰▰▱▱▱▱▱▱▱ 34%");
     expect(rendered).toContain("\x1b[38;2;0;255;0m▰");
     expect(rendered).toContain("\x1b[38;2;102;255;0m▰");
