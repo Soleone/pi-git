@@ -4,6 +4,7 @@ import {
   Key,
   matchesKey,
   truncateToWidth,
+  wrapTextWithAnsi,
   type Component,
   type Focusable,
   type TUI,
@@ -134,19 +135,27 @@ export class ShortcutSettingsDialog implements Component, Focusable {
   }
 
   render(width: number): string[] {
-    const lines = [
-      truncateToWidth(` ${this.theme.fg("accent", this.theme.bold("pi-git settings"))}`, width),
-      truncateToWidth(this.theme.fg("dim", "Configure global shortcuts and the optional footer. Changes apply after reload."), width),
-      truncateToWidth(this.theme.fg("borderMuted", "─".repeat(Math.max(0, width))), width),
+    const padding = width > 1 ? 1 : 0;
+    const contentWidth = Math.max(0, width - padding * 2);
+    const wrapWidth = Math.max(1, contentWidth);
+    const renderLine = (line: string): string =>
+      `${" ".repeat(padding)}${truncateToWidth(line, contentWidth)}${" ".repeat(padding)}`;
+    const renderText = (text: string): string[] =>
+      wrapTextWithAnsi(text, wrapWidth).map((line) => renderLine(line));
+    const lines: string[] = [
+      ...renderText(""),
+      ...renderText(this.theme.fg("accent", this.theme.bold("pi-git settings"))),
+      ...renderText(this.theme.fg("dim", "Configure global shortcuts and the optional footer. Changes apply after reload.")),
+      ...renderText(this.theme.fg("borderMuted", "─".repeat(contentWidth))),
     ];
-    if (this.errorMessage) lines.push(truncateToWidth(this.theme.fg("error", ` ${this.errorMessage}`), width));
+    if (this.errorMessage) lines.push(...renderText(this.theme.fg("error", ` ${this.errorMessage}`)));
 
     if (this.editing) {
       const action = ACTIONS[this.selected] ?? "openStatus";
-      lines.push(truncateToWidth(this.theme.fg("accent", ` Editing ${LABELS[action]}`), width));
+      lines.push(...renderText(this.theme.fg("accent", ` Editing ${LABELS[action]}`)));
       this.input.focused = this.focusedValue;
-      lines.push(...this.input.render(width));
-      lines.push(truncateToWidth(this.theme.fg("dim", " enter accept • esc cancel"), width));
+      lines.push(...this.input.render(contentWidth).map((line) => renderLine(line)));
+      lines.push(...renderText(this.theme.fg("dim", " enter accept • esc cancel")));
     } else {
       for (let index = 0; index < SETTINGS.length; index += 1) {
         const setting = SETTINGS[index];
@@ -155,11 +164,12 @@ export class ShortcutSettingsDialog implements Component, Focusable {
         const value = setting === "customFooter"
           ? this.customFooter ? "enabled" : "disabled"
           : this.values[setting] || "none";
-        lines.push(truncateToWidth(`${marker}${LABELS[setting]}: ${value}`, width));
+        lines.push(...renderText(`${marker}${LABELS[setting]}: ${value}`));
       }
-      lines.push(truncateToWidth(this.theme.fg("borderMuted", "─".repeat(Math.max(0, width))), width));
-      lines.push(truncateToWidth(this.theme.fg("dim", " ↑↓ select • enter edit/toggle • ctrl+s save • r reset selected • shift+r reset all • esc cancel"), width));
+      lines.push(...renderText(this.theme.fg("borderMuted", "─".repeat(contentWidth))));
+      lines.push(...renderText(this.theme.fg("dim", " ↑↓ select • enter edit/toggle • ctrl+s save • r reset selected • shift+r reset all • esc cancel")));
     }
+    lines.push(...renderText(""));
     return lines;
   }
 

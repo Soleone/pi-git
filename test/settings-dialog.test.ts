@@ -23,7 +23,11 @@ describe("ShortcutSettingsDialog", () => {
       result = value;
     });
 
-    expect(dialog.render(100).join("\n")).toContain("Custom footer: enabled");
+    const initialLines = dialog.render(100);
+    expect(initialLines[0]).toBe("  ");
+    expect(initialLines[1]).toBe(" pi-git settings ");
+    expect(initialLines.at(-1)).toBe("  ");
+    expect(initialLines.join("\n")).toContain("Custom footer: enabled");
     dialog.handleInput("\x1b[B");
     dialog.handleInput("\x1b[B");
     dialog.handleInput("\r");
@@ -31,5 +35,17 @@ describe("ShortcutSettingsDialog", () => {
     dialog.handleInput("\x13");
 
     expect(result).toMatchObject({ action: "save", config: { customFooter: false } });
+  });
+
+  it("wraps long content instead of truncating it", () => {
+    const tui = { requestRender: () => {} } as TUI;
+    const dialog = new ShortcutSettingsDialog(tui, theme, config, () => {});
+    const lines = dialog.render(40);
+    const rendered = lines.join("\n");
+
+    expect(rendered).toContain("reload.");
+    expect(rendered).toContain("shift+r reset all • esc cancel");
+    expect(rendered).not.toContain("...");
+    expect(lines.every((line) => line.length <= 40)).toBe(true);
   });
 });
