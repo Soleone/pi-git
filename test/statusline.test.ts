@@ -88,12 +88,16 @@ describe("registerStatusline", () => {
     expect(plainRendered).toContain("test-provider");
     expect(themed).toContainEqual({ color: "accent", text: "  Friendly model" });
     expect(themed).toContainEqual({ color: "dim", text: " test-provider" });
+    expect(themed).toContainEqual({ color: "muted", text: "$" });
+    expect(themed).toContainEqual({ color: "muted", text: "↑" });
+    expect(themed).toContainEqual({ color: "muted", text: "↓" });
+    expect(plainRendered).toContain("$0.00 ↑0 ↓0  00m00s");
     expect(plainRendered).toContain("▰▰▰▱▱▱▱▱▱▱ 34%");
     expect(rendered).toContain("\x1b[38;2;0;255;0m▰");
     expect(rendered).toContain("\x1b[38;2;102;255;0m▰");
     expect(rendered).toContain("\x1b[38;2;100;100;100m▱");
     expect(rendered).not.toContain("\x1b[38;2;255;0;0m▰");
-    expect(rendered).toMatch(/\b\d{2}:\d{2}\b/);
+    expect(rendered).not.toMatch(/\b\d{2}:\d{2}\b/);
     expect(rendered).not.toContain("Quick commit");
 
     const sessionShutdown = handlers.get("session_shutdown");

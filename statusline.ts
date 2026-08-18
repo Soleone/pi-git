@@ -69,7 +69,6 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
           const usage = ctx.getContextUsage();
           const percent = usage ? Math.min(100, Math.max(0, Math.round(usage.percent ?? 0))) : 0;
           const elapsed = formatDuration(Date.now() - sessionStarted);
-          const clock = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
           const context = `  ${contextBar(percent)} ${percent}%`;
           const line = [
             theme.fg("muted", directory),
@@ -77,8 +76,16 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
             theme.fg("accent", `  ${model}`),
             theme.fg("dim", ` ${provider}`),
             theme.fg("dim", context),
-            theme.fg("dim", `  $${cost.toFixed(2)} ↑${compactNumber(inputTokens)} ↓${compactNumber(outputTokens)}`),
-            theme.fg("dim", `  ${elapsed} ${clock}`),
+            theme.fg("dim", "  ") +
+              theme.fg("muted", "$") +
+              theme.fg("dim", cost.toFixed(2)) +
+              theme.fg("dim", " ") +
+              theme.fg("muted", "↑") +
+              theme.fg("dim", compactNumber(inputTokens)) +
+              theme.fg("dim", " ") +
+              theme.fg("muted", "↓") +
+              theme.fg("dim", compactNumber(outputTokens)),
+            theme.fg("dim", `  ${elapsed}`),
           ].join("");
           return [truncateToWidth(line, width)];
         },
@@ -134,6 +141,8 @@ function compactNumber(value: number): string {
 function formatDuration(milliseconds: number): string {
   const seconds = Math.floor(milliseconds / 1_000);
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m${seconds % 60}s`;
-  return `${Math.floor(minutes / 60)}h${minutes % 60}m`;
+  const paddedMinutes = String(minutes % 60).padStart(2, "0");
+  const paddedSeconds = String(seconds % 60).padStart(2, "0");
+  if (minutes < 60) return `${paddedMinutes}m${paddedSeconds}s`;
+  return `${Math.floor(minutes / 60)}h${paddedMinutes}m${paddedSeconds}s`;
 }
