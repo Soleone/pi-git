@@ -31,6 +31,8 @@ describe("registerStatusline", () => {
   });
 
   it("keeps extension status messages out of the custom footer", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
     type Handler = (...args: unknown[]) => unknown;
     type FooterFactory = (
       tui: { requestRender: () => void },
@@ -63,7 +65,8 @@ describe("registerStatusline", () => {
           type: "message",
           message: {
             role: "assistant",
-            usage: { input: 1_200, cacheRead: 3_400, output: 600, cost: { total: 0.25 } },
+            timestamp: 866_000,
+            usage: { input: 501_900, cacheRead: 4_587_500, output: 600, cost: { total: 0.25 } },
           },
         }],
       },
@@ -99,19 +102,26 @@ describe("registerStatusline", () => {
     expect(themed).toContainEqual({ color: "muted", text: "$" });
     expect(themed).toContainEqual({ color: "muted", text: "↑" });
     expect(themed).toContainEqual({ color: "muted", text: "⚡" });
+    expect(themed).toContainEqual({ color: "muted", text: "TTL" });
     expect(themed).toContainEqual({ color: "muted", text: "↓" });
-    expect(plainRendered).toContain("$0.25 ⚡3.4k ↑1.2k ↓600  00m00s");
+    expect(themed).toContainEqual({ color: "muted", text: "⏱" });
+    expect(themed).toContainEqual({ color: "muted", text: "Started" });
+    expect(plainRendered).toContain("$0.25 ⚡5M ↑502k ↓600 TTL 02:14  ⏱ 0m  Started ");
+    expect(plainRendered).toMatch(/Started \d{2}:\d{2}$/);
+    vi.setSystemTime(1_166_000);
+    footer.render(200);
+    expect(themed).toContainEqual({ color: "warning", text: "05:00" });
     expect(plainRendered).toContain("▰▰▰▱▱▱▱▱▱▱ 34%");
     expect(rendered).toContain("\x1b[38;2;0;255;0m▰");
     expect(rendered).toContain("\x1b[38;2;102;255;0m▰");
     expect(rendered).toContain("\x1b[38;2;100;100;100m▱");
     expect(rendered).not.toContain("\x1b[38;2;255;0;0m▰");
-    expect(rendered).not.toMatch(/\b\d{2}:\d{2}\b/);
     expect(rendered).not.toContain("Quick commit");
 
     const sessionShutdown = handlers.get("session_shutdown");
     if (!sessionShutdown) throw new Error("session_shutdown handler was not registered");
     await sessionShutdown({});
+    vi.useRealTimers();
   });
 
   it("requests a render when periodic git status changes", async () => {

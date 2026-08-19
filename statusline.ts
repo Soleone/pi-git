@@ -5,12 +5,18 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
   if (!enabled) return;
   let sessionStarted = Date.now();
+  let sessionElapsed = formatSessionDuration(0);
+  let sessionStartLabel = formatSessionStart(sessionStarted);
   let dirty = false;
   let inputTokens = 0;
   let cacheReadTokens = 0;
   let outputTokens = 0;
   let cost = 0;
+  let lastCacheRefreshAt: number | undefined;
+  let cacheResetAt = 0;
   let dirtyTimer: ReturnType<typeof setInterval> | undefined;
+  let ttlTimer: ReturnType<typeof setInterval> | undefined;
+  let sessionTimer: ReturnType<typeof setInterval> | undefined;
   let requestFooterRender: (() => void) | undefined;
   let disposed = false;
 
@@ -32,23 +38,41 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
     cacheReadTokens = 0;
     outputTokens = 0;
     cost = 0;
+    lastCacheRefreshAt = undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
       if (!isAssistantEntry(entry)) continue;
       inputTokens += entry.message.usage.input;
       cacheReadTokens += entry.message.usage.cacheRead;
       outputTokens += entry.message.usage.output;
       cost += entry.message.usage.cost.total;
+      if (entry.message.timestamp >= cacheResetAt && (entry.message.usage.cacheRead > 0 || entry.message.usage.cacheWrite > 0)) {
+        lastCacheRefreshAt = entry.message.timestamp;
+      }
     }
   };
 
   pi.on("session_start", async (_event, ctx) => {
     disposed = false;
     sessionStarted = Date.now();
+    const headerTimestamp = ctx.sessionManager.getHeader?.()?.timestamp;
+    const persistedStart = headerTimestamp === undefined ? NaN : Date.parse(headerTimestamp);
+    sessionStartLabel = formatSessionStart(Number.isFinite(persistedStart) ? persistedStart : sessionStarted);
+    cacheResetAt = 0;
     requestFooterRender = undefined;
+    sessionElapsed = formatSessionDuration(0);
     refreshUsage(ctx);
     await refreshDirty(ctx.cwd);
     if (dirtyTimer) clearInterval(dirtyTimer);
     dirtyTimer = setInterval(() => void refreshDirty(ctx.cwd), 5_000);
+    if (ttlTimer) clearInterval(ttlTimer);
+    ttlTimer = setInterval(() => {
+      if (lastCacheRefreshAt !== undefined) requestFooterRender?.();
+    }, 1_000);
+    if (sessionTimer) clearInterval(sessionTimer);
+    sessionTimer = setInterval(() => {
+      sessionElapsed = formatSessionDuration(Date.now() - sessionStarted);
+      requestFooterRender?.();
+    }, 60_000);
 
     ctx.ui.setFooter((tui, theme, footerData) => {
       const requestRender = () => tui.requestRender();
@@ -71,7 +95,9 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
           const provider = ctx.model?.provider || "no-provider";
           const usage = ctx.getContextUsage();
           const percent = usage ? Math.min(100, Math.max(0, Math.round(usage.percent ?? 0))) : 0;
-          const elapsed = formatDuration(Date.now() - sessionStarted);
+          const cacheAge = lastCacheRefreshAt === undefined ? undefined : Date.now() - lastCacheRefreshAt;
+          const cacheTtl = cacheAge === undefined ? undefined : formatTtl(cacheAge);
+          const cacheTtlColor = cacheAge !== undefined && cacheAge >= 5 * 60_000 ? "warning" : "dim";
           const context = `  ${contextBar(percent)} ${percent}%`;
           const line = [
             theme.fg("muted", directory),
@@ -90,8 +116,18 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
               theme.fg("dim", compactNumber(inputTokens)) +
               theme.fg("dim", " ") +
               theme.fg("muted", "↓") +
-              theme.fg("dim", compactNumber(outputTokens)),
-            theme.fg("dim", `  ${elapsed}`),
+              theme.fg("dim", compactNumber(outputTokens)) +
+              (cacheTtl === undefined ? "" :
+                theme.fg("dim", " ") +
+                theme.fg("muted", "TTL") +
+                theme.fg("dim", " ") +
+                theme.fg(cacheTtlColor, cacheTtl)),
+            theme.fg("dim", "  ") +
+              theme.fg("muted", "⏱") +
+              theme.fg("dim", ` ${sessionElapsed}`) +
+              theme.fg("dim", "  ") +
+              theme.fg("muted", "Started") +
+              theme.fg("dim", ` ${sessionStartLabel}`),
           ].join("");
           return [truncateToWidth(line, width)];
         },
@@ -99,7 +135,12 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
     });
   });
 
-  const usageHandler = async (_event: unknown, ctx: { sessionManager: { getBranch: () => readonly unknown[] } }) => refreshUsage(ctx);
+  const usageHandler = async (event: unknown, ctx: { sessionManager: { getBranch: () => readonly unknown[] } }) => {
+    if (event && typeof event === "object" && "type" in event && event.type === "session_compact") {
+      cacheResetAt = Date.now();
+    }
+    refreshUsage(ctx);
+  };
   for (const event of ["turn_end", "session_switch", "session_fork", "session_tree", "session_compact"] as const) {
     pi.on(event as any, usageHandler as any);
   }
@@ -110,6 +151,14 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
     if (dirtyTimer) {
       clearInterval(dirtyTimer);
       dirtyTimer = undefined;
+    }
+    if (ttlTimer) {
+      clearInterval(ttlTimer);
+      ttlTimer = undefined;
+    }
+    if (sessionTimer) {
+      clearInterval(sessionTimer);
+      sessionTimer = undefined;
     }
   });
 }
@@ -141,7 +190,31 @@ function rgb(red: number, green: number, blue: number, text: string): string {
 }
 
 function compactNumber(value: number): string {
-  return value >= 1_000 ? `${(value / 1_000).toFixed(1)}k` : String(value);
+  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
+  return value >= 1_000 ? `${Math.round(value / 1_000)}k` : String(value);
+}
+
+function formatTtl(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function formatSessionDuration(milliseconds: number): string {
+  const minutes = Math.max(0, Math.floor(milliseconds / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function formatSessionStart(timestamp: number): string {
+  const started = new Date(timestamp);
+  const now = new Date();
+  const startedDay = new Date(started.getFullYear(), started.getMonth(), started.getDate());
+  const currentDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayDifference = Math.round((currentDay.getTime() - startedDay.getTime()) / 86_400_000);
+  const time = `${String(started.getHours()).padStart(2, "0")}:${String(started.getMinutes()).padStart(2, "0")}`;
+  if (dayDifference === 0) return time;
+  if (dayDifference === 1) return `${time} yesterday`;
+  return `${started.toLocaleString("en-US", { month: "short" })} ${started.getDate()}`;
 }
 
 function formatDuration(milliseconds: number): string {
