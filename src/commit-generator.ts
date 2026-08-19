@@ -26,7 +26,7 @@ import {
   type StagedEvidence,
   planCommitEvidence,
 } from "./commit-evidence.js";
-import { validateCommitResponse, type CommitMessageValidation } from "./commit-message.js";
+import { shortenCommitMessageSubject, validateCommitResponse, type CommitMessageValidation } from "./commit-message.js";
 
 export interface CommitModelClient {
   complete(
@@ -150,7 +150,7 @@ export class CommitMessageGenerator {
       return this.responseFailure(response, candidate, request, attempted.length as 1 | 2);
     }
 
-    const validation = validateCommitResponse(response);
+    const validation = validateGeneratedResponse(response);
     if (!validation.ok) {
       return this.validationFailure(validation, response, candidate, request, attempted.length as 1 | 2);
     }
@@ -232,7 +232,7 @@ export class CommitMessageGenerator {
       return this.responseFailure(finalResult.response, finalCandidate, request, 2);
     }
 
-    const validation = validateCommitResponse(finalResult.response);
+    const validation = validateGeneratedResponse(finalResult.response);
     if (!validation.ok) {
       return this.validationFailure(validation, finalResult.response, finalCandidate, request, 2, analystResult.response);
     }
@@ -496,6 +496,24 @@ export function parseDiffAnalysisResponse(response: AssistantMessage, evidence: 
       unresolved,
     },
   };
+}
+
+function validateGeneratedResponse(response: AssistantMessage): CommitMessageValidation {
+  const validation = validateCommitResponse(response);
+  if (validation.ok || validation.code !== "subject-too-large") return validation;
+
+  const text = assistantText(response);
+  if (text === undefined) return validation;
+  const shortened = shortenCommitMessageSubject(text);
+  if (shortened === text) return validation;
+
+  // The model contract asks for this already. Keep the strict validator for
+  // callers that need to inspect raw output, but make generation resilient when
+  // a model ignores the byte limit.
+  return validateCommitResponse({
+    ...response,
+    content: [{ type: "text", text: shortened }],
+  });
 }
 
 function assistantText(response: AssistantMessage): string | undefined {

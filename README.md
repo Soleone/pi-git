@@ -77,7 +77,7 @@ The v1 quick-commit policy rejects:
 - no selected model or unavailable authentication;
 - staged diffs over the default 512 KiB hard input limit.
 
-The generated response must be a stopped, plain-text commit message with no tool calls, fences, NUL bytes, explanatory prefix, or overlong subject. It is written to a mode-`0600` temporary file and passed to `git commit --file`, so normal hooks run. The temporary file is removed even when Git or a hook fails.
+The generated response must be a stopped, plain-text commit message with no tool calls, fences, NUL bytes, or explanatory prefix. The first line is kept within the 72-byte subject convention; if a model ignores that instruction, pi-git shortens the subject at a complete-word boundary before presenting or committing the draft. It is written to a mode-`0600` temporary file and passed to `git commit --file`, so normal hooks run. The temporary file is removed even when Git or a hook fails.
 
 Commit generation is context-aware and fail-closed. pi-git captures a NUL-safe staged manifest, line counts, and complete `unified=1` and `unified=0` patches without binary payloads. It preflights the selected model's context window, output reserve, safety reserve, and a 512 KiB compact-evidence cap before making a request. Small changes use one fresh complete-diff request. Larger changes may reuse a warm active-session prefix with a small staged evidence packet; cold or unknown cache state falls back to complete compact evidence or one bounded analyst request followed by one final writer request. It never samples or silently truncates changed evidence.
 

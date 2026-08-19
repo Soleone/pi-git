@@ -121,6 +121,20 @@ describe("bounded commit generator", () => {
     expect((calls[0]?.context as { tools: unknown }).tools).toEqual([]);
   });
 
+  it("normalizes an overlong generated subject before returning a draft", async () => {
+    const generator = new CommitMessageGenerator({
+      complete: async () => response(`feat: ${"add ".repeat(30)}support\n\nkeep the body`),
+    });
+
+    const result = await generator.generate({ model: model(), evidence: evidence(), style: "style" });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(Buffer.byteLength(result.subject, "utf8")).toBeLessThanOrEqual(72);
+      expect(result.message).toContain("\n\nkeep the body");
+    }
+  });
+
   it("requires exact analyst coverage", () => {
     const parsed = parseDiffAnalysisResponse(response(JSON.stringify({
       version: 1,

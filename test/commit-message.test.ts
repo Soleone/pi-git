@@ -3,6 +3,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   buildCommitMessageUserMessage,
   COMMIT_SPECIFIC_SYSTEM_PROMPT,
+  shortenCommitMessageSubject,
   validateCommitResponse,
 } from "../src/commit-message.js";
 
@@ -30,9 +31,32 @@ describe("commit message prompt", () => {
   it("keeps the system prompt specific and the user input limited to the snapshot", () => {
     const message = buildCommitMessageUserMessage("style", "1 file changed", "diff --git a/a b/a");
     expect(COMMIT_SPECIFIC_SYSTEM_PROMPT).not.toContain("session");
+    expect(COMMIT_SPECIFIC_SYSTEM_PROMPT).toContain("UTF-8 bytes");
     expect(message.content).toContain("style");
     expect(message.content).toContain("1 file changed");
     expect(message.content).toContain("diff --git");
+  });
+});
+
+describe("shortenCommitMessageSubject", () => {
+  it("keeps the body and cuts at a complete UTF-8 word", () => {
+    const result = shortenCommitMessageSubject(
+      `feat: ${"add ".repeat(30)}support for café users\n\nkeep the body`,
+    );
+
+    const subject = result.split("\n", 1)[0] ?? "";
+    expect(Buffer.byteLength(subject, "utf8")).toBeLessThanOrEqual(72);
+    expect(subject).not.toMatch(/ad$/);
+    expect(result).toContain("\n\nkeep the body");
+  });
+
+  it("handles one long token without splitting a UTF-8 character", () => {
+    const result = shortenCommitMessageSubject(`${"界".repeat(40)}\nbody`);
+    const subject = result.split("\n", 1)[0] ?? "";
+
+    expect(Buffer.byteLength(subject, "utf8")).toBeLessThanOrEqual(72);
+    expect([...subject].every((character) => character === "界")).toBe(true);
+    expect(result).toContain("\nbody");
   });
 });
 
