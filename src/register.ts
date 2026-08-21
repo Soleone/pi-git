@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GitExecOptions, GitExecutor } from "./git-service.js";
+import type { GitExecutor } from "./git-service.js";
 import { GitService } from "./git-service.js";
 import { loadCommitStyle } from "./commit-message.js";
 import { QuickCommitController, type QuickCommitUi } from "./quick-commit.js";
@@ -14,9 +14,8 @@ import { openBranchManager, openGitStatus } from "./git-ui.js";
 import { runAmendCommit, runManualCommit, SmartCommitSession } from "./commit-workflow.js";
 import { registerStatusline } from "../statusline.js";
 
-const shortcutLoad = loadShortcutConfig();
-
 export function registerPiGit(pi: ExtensionAPI): void {
+  const shortcutLoad = loadShortcutConfig();
   registerStatusline(pi, shortcutLoad.config.customFooter);
   const quickCommits = new QuickCommitController();
   const smartCommit = new SmartCommitSession();
@@ -24,17 +23,12 @@ export function registerPiGit(pi: ExtensionAPI): void {
   let shortcutConfig: ShortcutConfig = shortcutLoad.config;
 
   const makeGit = (ctx: ExtensionContext): GitService => {
-    const exec: GitExecutor = (command, args, options) => {
-      const execOptions: GitExecOptions = {};
-      if (options?.cwd !== undefined) execOptions.cwd = options.cwd;
-      if (options?.timeout !== undefined) execOptions.timeout = options.timeout;
-      if (options?.signal !== undefined) execOptions.signal = options.signal;
-      return pi.exec(command, args, {
-        ...(execOptions.cwd === undefined ? {} : { cwd: execOptions.cwd }),
-        ...(execOptions.timeout === undefined ? {} : { timeout: execOptions.timeout }),
-        ...(execOptions.signal === undefined ? {} : { signal: execOptions.signal }),
+    const exec: GitExecutor = (command, args, options) =>
+      pi.exec(command, args, {
+        ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
+        ...(options?.timeout === undefined ? {} : { timeout: options.timeout }),
+        ...(options?.signal === undefined ? {} : { signal: options.signal }),
       });
-    };
     const git = new GitService(exec, ctx.cwd);
     git.onStaleLockRemoved = (lockPath) => ctx.ui.notify(`Removed stale git lock ${lockPath}`, "info");
     return git;

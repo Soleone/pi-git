@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import {
-  buildStagedFiles,
   extractRecentUserIntent,
+  type StagedEvidence,
+} from "../src/commit-evidence.js";
+import {
+  buildStagedFiles,
   formatStagedManifest,
   parseStagedNameStatus,
   parseStagedNumstat,
-  planCommitEvidence,
   summarizeStagedFiles,
-  type StagedEvidence,
-} from "../src/commit-evidence.js";
+} from "../src/evidence-parse.js";
+import { planCommitEvidence } from "../src/evidence-plan.js";
 import { CommitMessageGenerator, parseDiffAnalysisResponse } from "../src/commit-generator.js";
 
 function model(contextWindow = 32_000): Model<Api> {
@@ -94,7 +96,8 @@ describe("staged evidence contracts", () => {
       },
     });
     expect(result.route).toBe("cached-session");
-    expect(result.selected?.contextMessages?.length).toBe(3);
+    expect(result.selected?.representation).toBe("cached-session");
+    expect(result.selected?.fits).toBe(true);
   });
 
   it("rejects invalid or missing context metadata before model work", () => {

@@ -1,6 +1,7 @@
 import type { Api, AssistantMessage, Message, Model, UserMessage } from "@earendil-works/pi-ai";
 import { BorderedLoader, buildSessionContext, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { cacheConfidenceFromUsage, captureStagedEvidence, extractRecentUserIntent, snapshotCacheKey, type CacheConfidence, type CommitIntent, type CommitRepresentation, type CommitSessionContext, type StagedEvidence } from "./commit-evidence.js";
+import { cacheConfidenceFromUsage, captureStagedEvidence, extractRecentUserIntent, snapshotCacheKey, type CacheConfidence, type CommitIntent, type CommitSessionContext, type StagedEvidence } from "./commit-evidence.js";
+import type { CommitRepresentation } from "./evidence-plan.js";
 import {
   CommitMessageGenerator,
   type CommitGenerationRequest,
@@ -9,7 +10,7 @@ import {
   type CommitModelClient,
 } from "./commit-generator.js";
 import { loadCommitStyle } from "./commit-message.js";
-import type { GitMaybeSnapshot, GitService } from "./git-service.js";
+import { snapshotsMatch, type GitMaybeSnapshot, type GitService } from "./git-service.js";
 import { CommitEditor, type CommitEditorResult } from "./ui/commit-editor.js";
 const GENERATION_TIMEOUT_MS = 180_000;
 const MAX_CACHED_SESSION_MESSAGES = 16;
@@ -235,7 +236,7 @@ export class SmartCommitSession {
     const draft = this.draft;
     if (!draft) return "cancelled";
     const current = await git.maybeSnapshot();
-    if (!snapshotEqual(draft.snapshot, current)) {
+    if (!snapshotsMatch(draft.snapshot, current)) {
       this.draft = undefined;
       ctx.ui.notify("The staged snapshot changed; the commit draft was discarded.", "warning");
       return "started";
@@ -302,7 +303,7 @@ async function rewriteMessage(
     ctx.ui.notify(formatError(error), "error");
     return undefined;
   }
-  if (!snapshotEqual(expectedSnapshot, evidence.snapshot)) {
+  if (!snapshotsMatch(expectedSnapshot, evidence.snapshot)) {
     ctx.ui.notify("The staged snapshot changed; the rewrite was discarded.", "warning");
     return undefined;
   }
@@ -373,7 +374,7 @@ async function commitDirect(
   }
   if (expectedSnapshot) {
     const current = await git.maybeSnapshot();
-    if (!snapshotEqual(expectedSnapshot, current)) {
+    if (!snapshotsMatch(expectedSnapshot, current)) {
       ctx.ui.notify("The staged snapshot changed; nothing was committed.", "warning");
       return false;
     }
@@ -526,9 +527,6 @@ function formatGenerationFailure(prefix: string, result: Extract<CommitGeneratio
   return `${prefix} rejected: ${result.reason}`;
 }
 
-function snapshotEqual(a: GitMaybeSnapshot, b: GitMaybeSnapshot): boolean {
-  return a.root === b.root && a.branchRef === b.branchRef && a.head === b.head && a.indexTree === b.indexTree;
-}
 
 function firstLine(message: string): string {
   return message.split("\n", 1)[0] ?? message;

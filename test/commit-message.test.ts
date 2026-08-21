@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
-  buildCommitMessageUserMessage,
   COMMIT_SPECIFIC_SYSTEM_PROMPT,
   shortenCommitMessageSubject,
   validateCommitResponse,
@@ -28,13 +27,9 @@ function response(content: AssistantMessage["content"], stopReason: AssistantMes
 }
 
 describe("commit message prompt", () => {
-  it("keeps the system prompt specific and the user input limited to the snapshot", () => {
-    const message = buildCommitMessageUserMessage("style", "1 file changed", "diff --git a/a b/a");
+  it("keeps the system prompt specific to the staged snapshot", () => {
     expect(COMMIT_SPECIFIC_SYSTEM_PROMPT).not.toContain("session");
     expect(COMMIT_SPECIFIC_SYSTEM_PROMPT).toContain("UTF-8 bytes");
-    expect(message.content).toContain("style");
-    expect(message.content).toContain("1 file changed");
-    expect(message.content).toContain("diff --git");
   });
 });
 

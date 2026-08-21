@@ -5,27 +5,30 @@ import {
   type AssistantMessage,
   type Message,
   type Model,
-  type UserMessage,
   type Usage,
 } from "@earendil-works/pi-ai";
 import {
   cacheConfidenceFromUsage,
-  candidateForAnalysisFinal,
-  COMMIT_GENERATION_SYSTEM_PROMPT,
-  DIFF_ANALYST_SYSTEM_PROMPT,
   MAX_ANALYSIS_BYTES,
   type CacheConfidence,
-  type CommitEvidenceCandidate,
-  type CommitEvidencePlan,
-  type CommitEvidenceRequest,
   type CommitIntent,
   type CommitOperation,
-  type CommitRepresentation,
   type DiffAnalysis,
   type DiffAnalysisArea,
   type StagedEvidence,
-  planCommitEvidence,
 } from "./commit-evidence.js";
+import {
+  candidateForAnalysisFinal,
+  materializeCandidate,
+  modelContextWindow,
+  planCommitEvidence,
+  type CommitEvidenceCandidate,
+  type CommitEvidencePlan,
+  type CommitEvidenceRequest,
+  type CommitEvidenceSpec,
+  type CommitRepresentation,
+} from "./evidence-plan.js";
+import { isAbortError } from "./abort.js";
 import { shortenCommitMessageSubject, validateCommitResponse, type CommitMessageValidation } from "./commit-message.js";
 
 export interface CommitModelClient {
@@ -55,7 +58,7 @@ export interface CommitGenerationDiagnostics {
   readonly intentIncluded: boolean;
   readonly attempts: 1 | 2;
   readonly cacheConfidence: CacheConfidence;
-  readonly candidate: Pick<CommitEvidenceCandidate, "representation" | "estimatedInputTokens" | "inputBudget" | "outputReserve" | "safetyReserve" | "diffBytes" | "intentIncluded">;
+  readonly candidate: Pick<CommitEvidenceSpec, "representation" | "estimatedInputTokens" | "inputBudget" | "outputReserve" | "safetyReserve" | "diffBytes" | "intentIncluded">;
   readonly usage?: CommitUsageDiagnostics | undefined;
   readonly analystUsage?: CommitUsageDiagnostics | undefined;
 }
@@ -83,7 +86,7 @@ export type CommitGenerationResult =
         | "aborted";
       readonly reason: string;
       readonly diagnostics?: Omit<Partial<CommitGenerationDiagnostics>, "candidate"> & {
-        readonly candidate?: CommitEvidenceCandidate | undefined;
+        readonly candidate?: CommitEvidenceSpec | undefined;
       };
     };
 
@@ -126,33 +129,34 @@ export class CommitMessageGenerator {
     request: CommitGenerationRequest,
     evidenceRequest: CommitEvidenceRequest,
     plan: CommitEvidencePlan,
-    selected: CommitEvidenceCandidate,
+    selectedSpec: CommitEvidenceSpec,
   ): Promise<CommitGenerationResult> {
-    const attempted: CommitEvidenceCandidate[] = [selected];
-    let responseResult = await this.completeCandidate(request, selected);
-    let candidate = selected;
+    const attempted: CommitEvidenceSpec[] = [selectedSpec];
+    let candidate = materializeCandidate(evidenceRequest, selectedSpec);
+    let responseResult = await this.completeCandidate(request, candidate);
 
-    const retry = findCheaperCandidate(plan.candidates, selected);
+    const retry = findCheaperCandidate(plan.candidates, selectedSpec);
     if (
       (!responseResult.ok && responseResult.failure.code === "provider-overflow")
-      || (responseResult.ok && shouldUseCheaperRetry(responseResult.response, plan.contextWindow, selected.outputReserve))
+      || (responseResult.ok && shouldUseCheaperRetry(responseResult.response, plan.contextWindow, candidate.outputReserve))
     ) {
       if (retry) {
         attempted.push(retry);
-        candidate = retry;
-        responseResult = await this.completeCandidate(request, retry);
+        candidate = materializeCandidate(evidenceRequest, retry);
+        responseResult = await this.completeCandidate(request, candidate);
       }
     }
 
     if (!responseResult.ok) return responseResult.failure;
     const response = responseResult.response;
+    const attempts = attempted.length as 1 | 2;
     if (shouldUseCheaperRetry(response, plan.contextWindow, candidate.outputReserve)) {
-      return this.responseFailure(response, candidate, request, attempted.length as 1 | 2);
+      return this.responseFailure(response, candidate, request, attempts);
     }
 
     const validation = validateGeneratedResponse(response);
     if (!validation.ok) {
-      return this.validationFailure(validation, response, candidate, request, attempted.length as 1 | 2);
+      return this.validationFailure(validation, response, candidate, request, attempts);
     }
 
     const representation = routeForCandidate(candidate);
@@ -163,11 +167,11 @@ export class CommitMessageGenerator {
       representation,
       analysisUsed: false,
       intentIncluded: candidate.intentIncluded,
-      attempts: attempted.length as 1 | 2,
+      attempts,
       diagnostics: {
         route: representation,
         intentIncluded: candidate.intentIncluded,
-        attempts: attempted.length as 1 | 2,
+        attempts,
         cacheConfidence: effectiveCacheConfidence(request, response),
         candidate: candidateDiagnostics(candidate),
         usage: usageDiagnostics(response.usage),
@@ -179,8 +183,9 @@ export class CommitMessageGenerator {
     request: CommitGenerationRequest,
     evidenceRequest: CommitEvidenceRequest,
     plan: CommitEvidencePlan,
-    analystCandidate: CommitEvidenceCandidate,
+    analystSpec: CommitEvidenceSpec,
   ): Promise<CommitGenerationResult> {
+    const analystCandidate = materializeCandidate(evidenceRequest, analystSpec);
     const analystResult = await this.completeCandidate(request, analystCandidate);
     if (!analystResult.ok) return analystResult.failure;
     if (shouldUseCheaperRetry(analystResult.response, plan.contextWindow, analystCandidate.outputReserve)) {
@@ -205,12 +210,12 @@ export class CommitMessageGenerator {
     }
 
     const finalCandidates = candidateForAnalysisFinal(evidenceRequest, analysisResult.analysis);
-    const finalCandidate = finalCandidates.withIntent.fits
+    const finalSpec = finalCandidates.withIntent.fits
       ? finalCandidates.withIntent
       : finalCandidates.withoutIntent.fits
         ? finalCandidates.withoutIntent
         : undefined;
-    if (!finalCandidate) {
+    if (!finalSpec) {
       return {
         ok: false,
         code: "input-too-large",
@@ -226,6 +231,7 @@ export class CommitMessageGenerator {
       };
     }
 
+    const finalCandidate = materializeCandidate(evidenceRequest, finalSpec);
     const finalResult = await this.completeCandidate(request, finalCandidate);
     if (!finalResult.ok) return finalResult.failure;
     if (shouldUseCheaperRetry(finalResult.response, plan.contextWindow, finalCandidate.outputReserve)) {
@@ -296,12 +302,12 @@ export class CommitMessageGenerator {
 
   private responseFailure(
     response: AssistantMessage,
-    candidate: CommitEvidenceCandidate,
+    candidate: CommitEvidenceSpec,
     request: CommitGenerationRequest,
     attempts: 1 | 2,
     analystResponse?: AssistantMessage,
   ): Extract<CommitGenerationResult, { ok: false }> {
-    const overflow = isContextOverflow(response, planContextWindow(request.model));
+    const overflow = isContextOverflow(response, modelContextWindow(request.model) ?? 0);
     return {
       ok: false,
       code: overflow ? "provider-overflow" : "response-truncated",
@@ -323,7 +329,7 @@ export class CommitMessageGenerator {
   private validationFailure(
     validation: Exclude<CommitMessageValidation, { ok: true }>,
     response: AssistantMessage,
-    candidate: CommitEvidenceCandidate,
+    candidate: CommitEvidenceSpec,
     request: CommitGenerationRequest,
     attempts: 1 | 2,
     analystResponse?: AssistantMessage,
@@ -353,9 +359,9 @@ export async function generateCommitMessage(
 }
 
 function findCheaperCandidate(
-  candidates: readonly CommitEvidenceCandidate[],
-  selected: CommitEvidenceCandidate,
-): CommitEvidenceCandidate | undefined {
+  candidates: readonly CommitEvidenceSpec[],
+  selected: CommitEvidenceSpec,
+): CommitEvidenceSpec | undefined {
   const selectedIndex = candidates.indexOf(selected);
   return candidates.slice(selectedIndex + 1).find((candidate) =>
     candidate.fits
@@ -375,17 +381,12 @@ function effectiveCacheConfidence(request: CommitGenerationRequest, response: As
   return actual === "unknown" ? request.cacheConfidence ?? "unknown" : actual;
 }
 
-function planContextWindow(model: Model<Api>): number {
-  const value = (model as Model<Api> & { contextWindow?: unknown }).contextWindow;
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-function routeForCandidate(candidate: CommitEvidenceCandidate): CommitRepresentation {
+function routeForCandidate(candidate: CommitEvidenceSpec): CommitRepresentation {
   if (candidate.representation === "analyst" || candidate.representation === "analysis-final") return "analyst-assisted";
   return candidate.representation;
 }
 
-function candidateDiagnostics(candidate: CommitEvidenceCandidate): CommitGenerationDiagnostics["candidate"] {
+function candidateDiagnostics(candidate: CommitEvidenceSpec): CommitGenerationDiagnostics["candidate"] {
   return {
     representation: candidate.representation,
     estimatedInputTokens: candidate.estimatedInputTokens,
@@ -544,18 +545,5 @@ function isOverflowError(value: string): boolean {
   return /context|prompt.{0,20}(?:too long|too large)|token.{0,20}(?:limit|length)|exceed/i.test(value);
 }
 
-function isAbortError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as { name?: unknown; code?: unknown };
-  return value.name === "AbortError" || value.code === "ABORT_ERR";
-}
-
-export function commitGeneratorSystemPrompt(): string {
-  return COMMIT_GENERATION_SYSTEM_PROMPT;
-}
-
-export function analystSystemPrompt(): string {
-  return DIFF_ANALYST_SYSTEM_PROMPT;
-}
 
 export type { CommitIntent, CommitOperation, StagedEvidence };

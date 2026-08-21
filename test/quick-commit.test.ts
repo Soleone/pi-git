@@ -45,7 +45,16 @@ function fakeGit(options: {
     assertSupportedRepository: vi.fn(async () => ({ root: captured.root, branchRef: captured.branchRef, head: captured.head })),
     stageAll: vi.fn(async () => undefined),
     hasStagedChanges: vi.fn(async () => options.staged ?? true),
-    stagedSnapshot: vi.fn(async () => ({ ...captured, stat: "1 file changed", diff: "diff --git a/file b/file\n+change\n" })),
+    stagedEvidence: vi.fn(async () => ({
+      snapshot: captured,
+      stat: "1 file changed",
+      status: "",
+      shortStat: "1 file changed",
+      nameStatus: "M\0file\0",
+      numstat: "1\t0\tfile\0",
+      contextPatch: "diff --git a/file b/file\n+change\n",
+      compactPatch: "diff --git a/file b/file\n+change\n",
+    })),
     maybeSnapshot: vi.fn(async () => options.finalSnapshot ?? captured),
     commitFromFile: vi.fn(async (file: string) => options.commit?.(file)),
   } as unknown as GitService;

@@ -2,7 +2,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
-import { GitService, snapshotMatches } from "./git-service.js";
+import { isAbortError } from "./abort.js";
+import { GitService, snapshotsMatch } from "./git-service.js";
 import {
   captureStagedEvidence,
   normalizeCommitIntent,
@@ -94,6 +95,14 @@ interface TempMessageFile {
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
+const SETTLED_STATES: ReadonlySet<QuickCommitState> = new Set([
+  "succeeded",
+  "cancelled",
+  "stale",
+  "failed",
+  "timed_out",
+]);
+
 /**
  * Owns one background automatic commit. It deliberately accepts all mutable
  * dependencies at start time so an old command context is never consulted after
@@ -158,15 +167,6 @@ export class QuickCommitJob {
   private async run(): Promise<void> {
     this.armDeadline();
     try {
-      if (!this.request.model) {
-        this.fail(new Error("No model selected for quick commit."));
-        return;
-      }
-      if (this.request.modelRegistry.hasConfiguredAuth && !this.request.modelRegistry.hasConfiguredAuth(this.request.model)) {
-        this.fail(new Error("The selected model has no available authentication."));
-        return;
-      }
-
       this.transition("staging");
       await this.request.git.assertSupportedRepository(this.abortController.signal);
       await this.awaitAbortable(this.request.git.stageAll(this.abortController.signal));
@@ -200,7 +200,7 @@ export class QuickCommitJob {
       this.clearDeadline();
 
       const current = await this.request.git.maybeSnapshot();
-      if (!snapshotMatches(staged.snapshot, current)) {
+      if (!snapshotsMatch(staged.snapshot, current)) {
         this.finish("stale");
         this.notify("Quick commit: the branch, HEAD, or index changed. Nothing was committed.", "warning");
         return;
@@ -348,7 +348,7 @@ export class QuickCommitJob {
 
   private resolveIfNeeded(): void {
     if (this.settledValue) return;
-    if (this.stateValue === "idle" || ["staging", "drafting", "validating", "finalizing", "committing"].includes(this.stateValue)) return;
+    if (!SETTLED_STATES.has(this.stateValue)) return;
     this.settledValue = true;
     this.settle(this.stateValue);
   }
@@ -447,11 +447,6 @@ async function createTemporaryMessageFile(message: string): Promise<TempMessageF
   };
 }
 
-function isAbortError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as { name?: unknown; code?: unknown };
-  return value.name === "AbortError" || value.code === "ABORT_ERR";
-}
 
 function formatFailure(error: unknown): string {
   if (error instanceof Error) return `Quick commit failed: ${error.message}`;

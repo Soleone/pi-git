@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 export const MAX_COMMIT_DIFF_BYTES = 512 * 1024;
 export const MAX_COMMIT_MESSAGE_BYTES = 8_000;
@@ -12,6 +12,15 @@ export const COMMIT_SPECIFIC_SYSTEM_PROMPT = [
   "Do not mention unstaged, historical, or hypothetical changes. Do not add paths or facts absent from the staged snapshot.",
   `The first line is the commit subject and must be at most ${MAX_COMMIT_SUBJECT_BYTES} UTF-8 bytes, not characters. Rewrite a long subject before returning it.`,
   "Return the complete commit message as plain text and nothing else.",
+].join(" ");
+
+export const DIFF_ANALYST_SYSTEM_PROMPT = [
+  "You are a bounded Git diff analyst.",
+  "Read the complete staged snapshot supplied in the user message and return strict JSON only.",
+  "The staged manifest and complete patch are authoritative facts.",
+  "Cover every manifest file key exactly once in coveredFileKeys.",
+  "Return interpretation only: do not write a commit message and do not authorize or recommend committing.",
+  "Do not add paths, statuses, or facts that are absent from the staged snapshot.",
 ].join(" ");
 
 export interface CommitMessageLimits {
@@ -85,26 +94,6 @@ export function shortenCommitMessageSubject(
   }
   lines[0] = shortened;
   return lines.join("\n").trim();
-}
-
-export function buildCommitMessageUserMessage(
-  style: string,
-  stagedStat: string,
-  stagedDiff: string,
-): UserMessage {
-  return {
-    role: "user",
-    timestamp: Date.now(),
-    content: [
-      "Follow this COMMIT.md style guide:\n",
-      style,
-      "\n\nStaged diff stat:\n",
-      stagedStat || "(no stat)",
-      "\n\nStaged diff:\n",
-      stagedDiff,
-      "\n\nReturn only the final commit message. Do not add a preamble, markdown fences, or commentary.",
-    ].join(""),
-  };
 }
 
 export function validateCommitResponse(

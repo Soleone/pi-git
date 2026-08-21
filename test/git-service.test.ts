@@ -111,10 +111,10 @@ describe("GitService", () => {
     expect((await git(directory, ["add", "--", "first.txt"])).code).toBe(0);
 
     const service = new GitService(gitExec, directory);
-    const staged = await service.stagedSnapshot();
+    const staged = await service.maybeSnapshot();
     expect(staged.branchRef).toBe("refs/heads/main");
     expect(staged.head).toBeUndefined();
-    expect(staged.diff).toContain("first.txt");
+    expect(await service.stagedDiff()).toContain("first.txt");
     expect(await service.fileDiff("first.txt")).toContain("first.txt");
   });
 

@@ -216,12 +216,3 @@ function formatSessionStart(timestamp: number): string {
   if (dayDifference === 1) return `${time} yesterday`;
   return `${started.toLocaleString("en-US", { month: "short" })} ${started.getDate()}`;
 }
-
-function formatDuration(milliseconds: number): string {
-  const seconds = Math.floor(milliseconds / 1_000);
-  const minutes = Math.floor(seconds / 60);
-  const paddedMinutes = String(minutes % 60).padStart(2, "0");
-  const paddedSeconds = String(seconds % 60).padStart(2, "0");
-  if (minutes < 60) return `${paddedMinutes}m${paddedSeconds}s`;
-  return `${Math.floor(minutes / 60)}h${paddedMinutes}m${paddedSeconds}s`;
-}

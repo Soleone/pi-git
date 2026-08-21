@@ -84,16 +84,6 @@ export interface GitMaybeSnapshot {
   readonly indexTree?: string | undefined;
 }
 
-export interface GitStagedSnapshot {
-  readonly root: string;
-  readonly branchRef?: string | undefined;
-  readonly head?: string | undefined;
-  readonly indexTree: string;
-  readonly stat: string;
-  readonly diff: string;
-}
-
-/** Raw, independently requested inputs used by the cost-aware commit planner. */
 export interface GitStagedEvidenceRaw {
   readonly snapshot: GitMaybeSnapshot;
   readonly stat: string;
@@ -145,9 +135,8 @@ export class GitService {
     if (this.rootPath) return this.rootPath;
 
     const result = await this.execGitAllowFailure(
-      ["rev-parse", "--show-toplevel"],
-      "resolve repository root",
-      { cwd: this.initialCwd, signal },
+        ["rev-parse", "--show-toplevel"],
+        { cwd: this.initialCwd, signal },
     );
     const root = result.stdout.trim();
     if (result.code !== 0 || !root) {
@@ -220,9 +209,8 @@ export class GitService {
 
   async hasStagedChanges(signal?: AbortSignal): Promise<boolean> {
     const result = await this.execGitAllowFailure(
-      ["diff", "--cached", "--quiet", "--", "."],
-      "check staged changes",
-      { signal },
+        ["diff", "--cached", "--quiet", "--", "."],
+        { signal },
     );
     if (result.code === 0) return false;
     if (result.code === 1) return true;
@@ -230,39 +218,19 @@ export class GitService {
   }
 
   async stagedStat(signal?: AbortSignal): Promise<string> {
-    const result = await this.execGit(
-      ["diff", "--cached", "--stat", "--no-color", "--", "."],
-      "read staged diff stat",
-      { signal },
-    );
-    return result.stdout.trim();
+    return (await this.diffCached(["--stat"], signal)).trim();
   }
 
   async stagedShortStat(signal?: AbortSignal): Promise<string> {
-    const result = await this.execGit(
-      ["diff", "--cached", "--shortstat", "--no-color", "--", "."],
-      "read staged short stat",
-      { signal },
-    );
-    return result.stdout.trim();
+    return (await this.diffCached(["--shortstat"], signal)).trim();
   }
 
   async stagedNameStatus(signal?: AbortSignal): Promise<string> {
-    const result = await this.execGit(
-      ["diff", "--cached", "--name-status", "--find-renames", "--find-copies", "-z", "--", "."],
-      "read staged file manifest",
-      { signal },
-    );
-    return result.stdout;
+    return this.diffCached(["--name-status", "-z"], signal);
   }
 
   async stagedNumstat(signal?: AbortSignal): Promise<string> {
-    const result = await this.execGit(
-      ["diff", "--cached", "--numstat", "--find-renames", "--find-copies", "-z", "--", "."],
-      "read staged line counts",
-      { signal },
-    );
-    return result.stdout;
+    return this.diffCached(["--numstat", "-z"], signal);
   }
 
   async readStagedStatus(signal?: AbortSignal): Promise<string> {
@@ -280,11 +248,8 @@ export class GitService {
 
   /** Read the staged patch with an explicit context width and no binary payload. */
   async stagedPatch(unified?: number, signal?: AbortSignal): Promise<string> {
-    const args = ["diff", "--cached", "--no-ext-diff", "--no-color", "--find-renames", "--find-copies"];
-    if (unified !== undefined) args.push(`--unified=${unified}`);
-    args.push("--", ".");
-    const result = await this.execGit(args, "read staged diff", { signal, timeout: 60_000 });
-    return result.stdout;
+    const extra = unified === undefined ? [] : [`--unified=${unified}`];
+    return this.diffCached(extra, signal, { timeout: 60_000 });
   }
 
   /** Capture all cheap staged evidence and two independently generated patches. */
@@ -305,9 +270,8 @@ export class GitService {
 
   async readBranchRef(signal?: AbortSignal): Promise<string | undefined> {
     const result = await this.execGitAllowFailure(
-      ["symbolic-ref", "--quiet", "HEAD"],
-      "read current branch",
-      { signal },
+        ["symbolic-ref", "--quiet", "HEAD"],
+        { signal },
     );
     if (result.code !== 0) return undefined;
     const ref = result.stdout.trim();
@@ -316,9 +280,8 @@ export class GitService {
 
   async readHead(signal?: AbortSignal): Promise<string | undefined> {
     const result = await this.execGitAllowFailure(
-      ["rev-parse", "--verify", "HEAD"],
-      "read HEAD",
-      { signal },
+        ["rev-parse", "--verify", "HEAD"],
+        { signal },
     );
     if (result.code !== 0) return undefined;
     const head = result.stdout.trim();
@@ -354,18 +317,6 @@ export class GitService {
     return { root, branchRef, head, indexTree };
   }
 
-  async stagedSnapshot(signal?: AbortSignal): Promise<GitStagedSnapshot> {
-    const [snapshot, stat, diff] = await Promise.all([
-      this.maybeSnapshot(signal),
-      this.stagedStat(signal),
-      this.stagedDiff(signal),
-    ]);
-    if (!snapshot.indexTree) {
-      throw new Error("The Git index contains unmerged entries.");
-    }
-    return { ...snapshot, indexTree: snapshot.indexTree, stat, diff };
-  }
-
   async commitFromFile(messageFile: string): Promise<void> {
     await this.execGit(
       ["commit", "--file", messageFile],
@@ -393,9 +344,8 @@ export class GitService {
 
   async headCommitIsPushed(signal?: AbortSignal): Promise<boolean> {
     const result = await this.execGitAllowFailure(
-      ["branch", "--remotes", "--contains", "HEAD"],
-      "check whether latest commit is pushed",
-      { signal },
+        ["branch", "--remotes", "--contains", "HEAD"],
+        { signal },
     );
     return result.code === 0 && result.stdout.trim().length > 0;
   }
@@ -459,28 +409,8 @@ export class GitService {
   }
 
   async fileDiff(filePath: string, untracked = false, signal?: AbortSignal): Promise<string> {
-    if (untracked) {
-      const result = await this.execGitAllowFailure(
-        ["diff", "--no-index", "--no-ext-diff", "--no-color", "--", "/dev/null", filePath],
-        "read untracked file diff",
-        { signal, timeout: 30_000 },
-      );
-      if (result.code !== 0 && result.code !== 1) {
-        throw new GitOperationError("read untracked file diff", ["diff", "--no-index", "--no-ext-diff", "--no-color", "--", "/dev/null", filePath], result);
-      }
-      return result.stdout || result.stderr;
-    }
-
-    if (!(await this.readHead(signal))) {
-      const result = await this.execGitAllowFailure(
-        ["diff", "--no-index", "--no-ext-diff", "--no-color", "--", "/dev/null", filePath],
-        "read file diff",
-        { signal, timeout: 30_000 },
-      );
-      if (result.code !== 0 && result.code !== 1) {
-        throw new GitOperationError("read file diff", ["diff", "--no-index", "--no-ext-diff", "--no-color", "--", "/dev/null", filePath], result);
-      }
-      return result.stdout || result.stderr;
+    if (untracked || !(await this.readHead(signal))) {
+      return this.diffAgainstDevNull(filePath, signal);
     }
 
     const result = await this.execGit(
@@ -491,11 +421,20 @@ export class GitService {
     return result.stdout;
   }
 
+  /** Diff a file that has no HEAD version against the empty tree. */
+  private async diffAgainstDevNull(filePath: string, signal?: AbortSignal): Promise<string> {
+    const args = ["diff", "--no-index", "--no-ext-diff", "--no-color", "--", "/dev/null", filePath];
+    const result = await this.execGitAllowFailure(args, { signal, timeout: 30_000 });
+    if (result.code !== 0 && result.code !== 1) {
+      throw new GitOperationError("read file diff", args, result);
+    }
+    return result.stdout || result.stderr;
+  }
+
   private async findOperationInProgress(root: string, signal?: AbortSignal): Promise<string | undefined> {
     for (const marker of COMMIT_OPERATION_MARKERS) {
       const result = await this.execGitAllowFailure(
         ["rev-parse", "--git-path", marker],
-        "inspect repository operation state",
         { cwd: root, signal },
       );
       if (result.code !== 0) continue;
@@ -515,10 +454,26 @@ export class GitService {
   }
 
   private async readIndexTreeAllowFailure(signal?: AbortSignal): Promise<string | undefined> {
-    const result = await this.execGitAllowFailure(["write-tree"], "read index tree", { signal });
+    const result = await this.execGitAllowFailure(
+        ["write-tree"],
+        { signal });
     if (result.code !== 0) return undefined;
     const tree = result.stdout.trim();
     return tree || undefined;
+  }
+
+  /** Run `git diff --cached` with pi-git's shared completeness flags. */
+  private async diffCached(
+    extraArgs: string[],
+    signal?: AbortSignal,
+    execOptions: GitExecOptions = {},
+  ): Promise<string> {
+    const result = await this.execGit(
+      ["diff", "--cached", "--no-ext-diff", "--no-color", "--find-renames", "--find-copies", ...extraArgs, "--", "."],
+      "read staged diff",
+      { signal, ...execOptions },
+    );
+    return result.stdout;
   }
 
   private async execGit(
@@ -531,7 +486,6 @@ export class GitService {
 
   private async execGitAllowFailure(
     args: string[],
-    _operation: string,
     options: GitExecOptions = {},
   ): Promise<GitExecResult> {
     return this.runWithLockRecovery(args, options, undefined, false);
@@ -676,10 +630,6 @@ export function parsePorcelainV1Z(output: string): GitStatusEntry[] {
   return entries;
 }
 
-export function sameGitSnapshot(a: GitSnapshot, b: GitSnapshot): boolean {
-  return a.root === b.root && a.branchRef === b.branchRef && a.head === b.head && a.indexTree === b.indexTree;
-}
-
-export function snapshotMatches(a: GitMaybeSnapshot, b: GitMaybeSnapshot): boolean {
+export function snapshotsMatch(a: GitMaybeSnapshot, b: GitMaybeSnapshot): boolean {
   return a.root === b.root && a.branchRef === b.branchRef && a.head === b.head && a.indexTree === b.indexTree;
 }
