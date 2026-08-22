@@ -427,12 +427,17 @@ function candidateDiagnostics(candidate: CommitEvidenceSpec): CommitGenerationDi
   };
 }
 
-/** Positive thinking levels map to both the uniform and the openai-completions effort option. */
+/**
+ * Positive thinking levels map to both the uniform and the openai-completions
+ * effort option, capped at "low": commit messages are simple generation tasks
+ * and heavy reasoning dominates latency on reasoning-mandatory endpoints.
+ */
 function reasoningOptions(level: CommitGenerationRequest["reasoning"]):
   | { reasoning?: ThinkingLevel; reasoningEffort?: ThinkingLevel }
   | {} {
   if (level === undefined || level === "off") return {};
-  return { reasoning: level, reasoningEffort: level };
+  const capped: ThinkingLevel = level === "minimal" ? "minimal" : "low";
+  return { reasoning: capped, reasoningEffort: capped };
 }
 
 function usageDiagnostics(usage: Usage | undefined): CommitUsageDiagnostics | undefined {

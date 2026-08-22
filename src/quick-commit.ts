@@ -10,6 +10,7 @@ import {
   type CommitIntent,
   type StagedEvidence,
 } from "./commit-evidence.js";
+import { classifyFormattingOnly } from "./mechanical-diff.js";
 import {
   CommitMessageGenerator,
   type CommitGenerationDiagnostics,
@@ -177,11 +178,24 @@ export class QuickCommitJob {
         return;
       }
 
+      this.notify("Quick commit: capturing staged evidence…", "info");
       const staged = await this.awaitAbortable<StagedEvidence>(captureStagedEvidence(this.request.git, this.abortController.signal));
+      if (staged.partial) {
+        this.notify(`Quick commit: large staged diff (${staged.partial.originalCompactBytes.toLocaleString()} bytes); using reduced evidence.`, "info");
+      }
+
+      // Pure reformatting gets a deterministic message without any model call.
+      const explicitOrSessionIntent = typeof this.request.intent === "string"
+        ? normalizeCommitIntent(this.request.intent, "explicit")
+        : this.request.intent;
+      if (explicitOrSessionIntent === undefined && classifyFormattingOnly(staged.files, staged.compactPatch).formattingOnly) {
+        await this.commitDeterministicFormatting(staged);
+        return;
+      }
 
       this.throwIfCancelled();
       this.transition("drafting");
-      const generated = await this.completeMessage(staged);
+      const generated = await this.completeMessage(staged, explicitOrSessionIntent);
       if (!generated.ok) throw new CommitMessageGenerationError(generated.code, generated.reason);
 
       this.throwIfCancelled();
@@ -229,14 +243,14 @@ export class QuickCommitJob {
     }
   }
 
-  private async completeMessage(evidence: StagedEvidence): Promise<CommitGenerationResult> {
+  private async completeMessage(
+    evidence: StagedEvidence,
+    explicitIntent: CommitIntent | undefined,
+  ): Promise<CommitGenerationResult> {
     const client: CommitModelClient = {
       complete: (model, context, options) => this.request.modelRegistry.complete(model, context, options),
     };
     const generator = new CommitMessageGenerator(client);
-    const explicitIntent = typeof this.request.intent === "string"
-      ? normalizeCommitIntent(this.request.intent, "explicit")
-      : this.request.intent;
     const promise = generator.generate({
       model: this.request.model as Model<Api>,
       evidence,
@@ -246,6 +260,44 @@ export class QuickCommitJob {
       signal: this.abortController.signal,
     });
     return this.awaitAbortable(promise);
+  }
+
+  /** Deterministic commit for whitespace-only churn; no model round trip. */
+  private async commitDeterministicFormatting(staged: StagedEvidence): Promise<void> {
+    this.throwIfCancelled();
+    this.transition("drafting");
+    const fileCount = staged.summary.fileCount;
+    const subject = fileCount === 1
+      ? `style: format ${staged.files[0]?.path ?? "file"}`
+      : `style: format ${fileCount} files`;
+    const message = `${subject}\n\nWhitespace-only changes detected by pi-git; generated without a model call.`;
+
+    this.subject = subject;
+    this.finalizationStarted = true;
+    this.transition("finalizing");
+    this.clearDeadline();
+
+    const current = await this.request.git.maybeSnapshot();
+    if (!snapshotsMatch(staged.snapshot, current)) {
+      this.finish("stale");
+      this.notify("Quick commit: the branch, HEAD, or index changed. Nothing was committed.", "warning");
+      return;
+    }
+
+    const temp = await createTemporaryMessageFile(message);
+    try {
+      this.transition("committing");
+      await this.request.git.commitFromFile(temp.path);
+    } finally {
+      try {
+        await temp.cleanup();
+      } catch {
+        // The commit already succeeded; cleanup failures must not fail the job.
+      }
+    }
+
+    this.finish("succeeded");
+    this.notify(`Git committed\n  ${subject}`, "info");
   }
 
   private transition(next: QuickCommitState): void {
