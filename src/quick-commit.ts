@@ -234,7 +234,7 @@ export class QuickCommitJob {
       if (commitError) throw commitError;
 
       this.finish("succeeded");
-      this.notify(`Git committed\n  ${this.subject}`, "info");
+      this.notify(`Quick commit: complete\n  ${this.subject}`, "info");
     } catch (error: unknown) {
       this.fail(error);
     } finally {
@@ -297,7 +297,7 @@ export class QuickCommitJob {
     }
 
     this.finish("succeeded");
-    this.notify(`Git committed\n  ${subject}`, "info");
+    this.notify(`Quick commit: complete\n  ${subject}`, "info");
   }
 
   private transition(next: QuickCommitState): void {
@@ -314,14 +314,14 @@ export class QuickCommitJob {
 
     if (this.cancellationRequested || error instanceof QuickCommitCancelled || isAbortError(error)) {
       this.stateValue = "cancelled";
-      this.notify("Quick commit cancelled.", "info");
+      this.notify("Quick commit: cancelled.", "info");
       this.resolveIfNeeded();
       return;
     }
 
     if (this.timeoutRequested || error instanceof QuickCommitTimedOut) {
       this.stateValue = "timed_out";
-      this.notify("Quick commit timed out before finalization.", "error");
+      this.notify("Quick commit: timed out before finalization.", "error");
       this.resolveIfNeeded();
       return;
     }
@@ -435,7 +435,7 @@ export class QuickCommitController {
     const job = new QuickCommitJob(request);
     this.current = job;
     job.start();
-    this.notify(request.ui, "Git committing...", "info");
+    this.notify(request.ui, "Quick commit: committing...", "info");
     return { accepted: true, job };
   }
 
@@ -444,7 +444,7 @@ export class QuickCommitController {
     const job = this.current;
     if (!job || job.isSettled) return "no-job";
     if (job.isFinalizing) {
-      this.notify(ui, "Quick commit is already finalizing; cancellation is too late.", "warning");
+      this.notify(ui, "Quick commit: already finalizing; cancellation is too late.", "warning");
       return "too-late";
     }
     job.requestCancellation();
