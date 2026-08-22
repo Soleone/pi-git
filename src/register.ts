@@ -63,6 +63,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
       modelRegistry: ctx.modelRegistry,
       model: ctx.model,
       commitStyle: loadCommitStyle(ctx.cwd),
+      ...(ctx.thinkingLevel === undefined ? {} : { thinkingLevel: ctx.thinkingLevel }),
       ui,
     });
   };

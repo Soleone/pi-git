@@ -5,11 +5,14 @@ import {
   type AssistantMessage,
   type Message,
   type Model,
+  type ModelThinkingLevel,
+  type ThinkingLevel,
   type Usage,
 } from "@earendil-works/pi-ai";
 import {
   cacheConfidenceFromUsage,
   MAX_ANALYSIS_BYTES,
+  reduceStagedEvidence,
   type CacheConfidence,
   type CommitIntent,
   type CommitOperation,
@@ -35,13 +38,21 @@ export interface CommitModelClient {
   complete(
     model: Model<Api>,
     context: { systemPrompt?: string; messages: Message[]; tools: [] },
-    options: { signal?: AbortSignal; maxTokens: number },
+    options: {
+      signal?: AbortSignal;
+      maxTokens: number;
+      reasoning?: ThinkingLevel;
+      /** API-level effort for openai-completions providers (e.g. OpenRouter reasoning-mandatory endpoints). */
+      reasoningEffort?: ThinkingLevel;
+    },
   ): Promise<AssistantMessage>;
 }
 
 export interface CommitGenerationRequest extends CommitEvidenceRequest {
   readonly signal?: AbortSignal | undefined;
   readonly cacheConfidence?: CacheConfidence | undefined;
+  /** Session thinking level; endpoints that mandate reasoning reject requests without it. */
+  readonly reasoning?: ModelThinkingLevel | undefined;
 }
 
 export interface CommitUsageDiagnostics {
@@ -94,6 +105,20 @@ export class CommitMessageGenerator {
   constructor(private readonly client: CommitModelClient) {}
 
   async generate(request: CommitGenerationRequest): Promise<CommitGenerationResult> {
+    const result = await this.attemptGeneration(request);
+    // A provider can still refuse reduced evidence (smaller effective context
+    // than the declared window). One bounded re-reduction attempt at half the
+    // bytes before giving up.
+    if (!result.ok && result.code !== "aborted" && request.evidence.partial) {
+      const reduced = reduceStagedEvidence(request.evidence, Math.floor(request.evidence.compactBytes / 2));
+      if (reduced) {
+        return this.attemptGeneration({ ...request, evidence: reduced });
+      }
+    }
+    return result;
+  }
+
+  private async attemptGeneration(request: CommitGenerationRequest): Promise<CommitGenerationResult> {
     const evidenceRequest: CommitEvidenceRequest = {
       model: request.model,
       evidence: request.evidence,
@@ -280,6 +305,7 @@ export class CommitMessageGenerator {
         {
           maxTokens: candidate.outputReserve,
           ...(request.signal === undefined ? {} : { signal: request.signal }),
+          ...reasoningOptions(request.reasoning),
         },
       );
       return { ok: true, response };
@@ -308,12 +334,15 @@ export class CommitMessageGenerator {
     analystResponse?: AssistantMessage,
   ): Extract<CommitGenerationResult, { ok: false }> {
     const overflow = isContextOverflow(response, modelContextWindow(request.model) ?? 0);
+    const detail = response.errorMessage
+      ? ` Provider error: ${response.errorMessage.length > 400 ? `${response.errorMessage.slice(0, 400)}…` : response.errorMessage}`
+      : "";
     return {
       ok: false,
       code: overflow ? "provider-overflow" : "response-truncated",
       reason: overflow
-        ? "The provider reported that the complete commit evidence exceeded its context window. Stage a smaller change or select a larger-context model."
-        : "The commit message response was truncated before a complete message was produced.",
+        ? `The provider reported that the commit evidence exceeded its context window. Stage a smaller change or select a larger-context model.${detail}`
+        : `The commit message response was truncated before a complete message was produced.${detail}`,
       diagnostics: {
         route: routeForCandidate(candidate),
         intentIncluded: candidate.intentIncluded,
@@ -396,6 +425,14 @@ function candidateDiagnostics(candidate: CommitEvidenceSpec): CommitGenerationDi
     diffBytes: candidate.diffBytes,
     intentIncluded: candidate.intentIncluded,
   };
+}
+
+/** Positive thinking levels map to both the uniform and the openai-completions effort option. */
+function reasoningOptions(level: CommitGenerationRequest["reasoning"]):
+  | { reasoning?: ThinkingLevel; reasoningEffort?: ThinkingLevel }
+  | {} {
+  if (level === undefined || level === "off") return {};
+  return { reasoning: level, reasoningEffort: level };
 }
 
 function usageDiagnostics(usage: Usage | undefined): CommitUsageDiagnostics | undefined {

@@ -4,6 +4,8 @@
  */
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import type { GitService } from "./git-service.js";
+import { MAX_COMMIT_DIFF_BYTES } from "./commit-message.js";
+import { buildDiffSkeleton, type SkeletonOmittedFile } from "./diff-skeleton.js";
 import {
   buildStagedFiles,
   estimateTextTokensLocal,
@@ -30,6 +32,17 @@ export interface StagedEvidence {
   readonly compactPatch: string;
   readonly contextBytes: number;
   readonly compactBytes: number;
+  /** Present only when the complete compact patch exceeded the hard cap and was replaced by a labeled skeleton projection. */
+  readonly partial?: PartialEvidence | undefined;
+}
+
+export interface PartialEvidence {
+  /** Compact-patch byte size before skeleton reduction. */
+  readonly originalCompactBytes: number;
+  /** Files whose change bodies were omitted, in omission order. */
+  readonly omittedFiles: readonly SkeletonOmittedFile[];
+  /** Unreduced compact patch, kept so generation can re-reduce with a smaller budget. */
+  readonly rawCompactPatch: string;
 }
 
 export interface CommitIntent {
@@ -70,6 +83,27 @@ export async function captureStagedEvidence(git: GitService, signal?: AbortSigna
   const raw = await git.stagedEvidence(signal);
   const files = buildStagedFiles(raw.nameStatus, raw.numstat);
   const summary = summarizeStagedFiles(files, raw.compactPatch);
+  const compactBytes = Buffer.byteLength(raw.compactPatch, "utf8");
+  let compactPatch = raw.compactPatch;
+  let effectiveCompactBytes = compactBytes;
+  let partial: PartialEvidence | undefined;
+
+  // Oversized diffs degrade explicitly to a labeled skeleton projection instead
+  // of failing closed; every file header and hunk header survives and each
+  // omitted body is enumerated inside the patch itself.
+  if (compactBytes > MAX_COMMIT_DIFF_BYTES) {
+    const skeleton = buildDiffSkeleton(raw.compactPatch, MAX_COMMIT_DIFF_BYTES);
+    if (skeleton.bytes <= MAX_COMMIT_DIFF_BYTES) {
+      compactPatch = skeleton.patch;
+      effectiveCompactBytes = skeleton.bytes;
+      partial = {
+        originalCompactBytes: compactBytes,
+        omittedFiles: skeleton.omittedFiles,
+        rawCompactPatch: raw.compactPatch,
+      };
+    }
+  }
+
   return {
     snapshot: raw.snapshot,
     stat: raw.stat,
@@ -77,9 +111,33 @@ export async function captureStagedEvidence(git: GitService, signal?: AbortSigna
     files,
     summary,
     contextPatch: raw.contextPatch,
-    compactPatch: raw.compactPatch,
+    compactPatch,
     contextBytes: Buffer.byteLength(raw.contextPatch, "utf8"),
-    compactBytes: Buffer.byteLength(raw.compactPatch, "utf8"),
+    compactBytes: effectiveCompactBytes,
+    ...(partial === undefined ? {} : { partial }),
+  };
+}
+
+/** Minimum partial-evidence size before another reduction attempt is worthwhile. */
+export const MIN_REDUCTION_BYTES = 64 * 1024;
+
+/** Rebuild partial evidence from the raw patch at a smaller budget; undefined when reduction is impossible or pointless. */
+export function reduceStagedEvidence(evidence: StagedEvidence, budgetBytes: number): StagedEvidence | undefined {
+  const partial = evidence.partial;
+  if (!partial || evidence.compactBytes <= MIN_REDUCTION_BYTES || budgetBytes >= evidence.compactBytes) {
+    return undefined;
+  }
+  const skeleton = buildDiffSkeleton(partial.rawCompactPatch, budgetBytes);
+  if (skeleton.bytes >= evidence.compactBytes) return undefined;
+  return {
+    ...evidence,
+    compactPatch: skeleton.patch,
+    compactBytes: skeleton.bytes,
+    partial: {
+      originalCompactBytes: partial.originalCompactBytes,
+      omittedFiles: skeleton.omittedFiles,
+      rawCompactPatch: partial.rawCompactPatch,
+    },
   };
 }
 

@@ -188,16 +188,16 @@ function filesStatusIncludesDeletion(status: string): boolean {
   return status[0] === "D";
 }
 
-function isGeneratedPath(value: string): boolean {
+export function isGeneratedPath(value: string): boolean {
   return /(^|\/)(?:generated|dist|build|coverage|\.next|out)(?:\/|$)/i.test(value)
     || /(?:\.generated\.|\.gen\.)/i.test(value);
 }
 
-function isLockPath(value: string): boolean {
+export function isLockPath(value: string): boolean {
   return /(?:^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|Cargo\.lock|composer\.lock|Gemfile\.lock|Podfile\.lock)$/i.test(value);
 }
 
-function isVendorPath(value: string): boolean {
+export function isVendorPath(value: string): boolean {
   return /(^|\/)(?:node_modules|vendor|third_party|\.venv)(?:\/|$)/i.test(value);
 }
 

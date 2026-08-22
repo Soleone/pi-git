@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Message, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { isAbortError } from "./abort.js";
 import { GitService, snapshotsMatch } from "./git-service.js";
 import {
@@ -16,7 +16,6 @@ import {
   type CommitGenerationResult,
   type CommitModelClient,
 } from "./commit-generator.js";
-import { MAX_COMMIT_DIFF_BYTES } from "./commit-message.js";
 
 export type QuickCommitState =
   | "idle"
@@ -35,7 +34,7 @@ export interface QuickCommitModelRegistry {
   complete(
     model: Model<Api>,
     context: { systemPrompt?: string; messages: Message[]; tools: [] },
-    options?: { signal?: AbortSignal; maxTokens?: number },
+    options?: { signal?: AbortSignal; maxTokens?: number; reasoning?: ModelThinkingLevel },
   ): Promise<AssistantMessage>;
   hasConfiguredAuth?(model: Model<Api>): boolean;
 }
@@ -51,7 +50,8 @@ export interface QuickCommitStartRequest {
   readonly model?: Model<Api> | undefined;
   readonly commitStyle: string;
   readonly ui: QuickCommitUi;
-  readonly maxDiffBytes?: number;
+  /** Session thinking level forwarded to the model call. */
+  readonly thinkingLevel?: ModelThinkingLevel | undefined;
   readonly timeoutMs?: number;
   /** Explicit intent is supported for callers that do not want implicit session history. */
   readonly intent?: CommitIntent | string | undefined;
@@ -178,11 +178,6 @@ export class QuickCommitJob {
       }
 
       const staged = await this.awaitAbortable<StagedEvidence>(captureStagedEvidence(this.request.git, this.abortController.signal));
-      const maxDiffBytes = this.request.maxDiffBytes ?? MAX_COMMIT_DIFF_BYTES;
-      const diffBytes = staged.compactBytes;
-      if (diffBytes > maxDiffBytes) {
-        throw new Error(`The complete compact staged evidence is ${diffBytes.toLocaleString()} bytes, above the ${maxDiffBytes.toLocaleString()}-byte hard limit.`);
-      }
 
       this.throwIfCancelled();
       this.transition("drafting");
@@ -247,6 +242,7 @@ export class QuickCommitJob {
       evidence,
       style: this.request.commitStyle,
       ...(explicitIntent === undefined ? {} : { intent: explicitIntent }),
+      ...(this.request.thinkingLevel === undefined ? {} : { reasoning: this.request.thinkingLevel }),
       signal: this.abortController.signal,
     });
     return this.awaitAbortable(promise);

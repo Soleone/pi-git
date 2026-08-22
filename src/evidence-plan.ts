@@ -376,14 +376,14 @@ function buildCandidateContent(
 
   if (representation === "context" || representation === "compact") {
     const patch = representation === "context" ? request.evidence.contextPatch : request.evidence.compactPatch;
-    sections.push(`<complete-staged-patch authoritative=\"true\" representation=\"${representation}\">\n${patch}\n</complete-staged-patch>`);
+    sections.push(stagedPatchSection(request, patch, representation));
   } else if (representation === "cached-session") {
     if (cachedPatch) {
-      sections.push(`<complete-staged-patch authoritative=\"true\" representation=\"compact\">\n${request.evidence.compactPatch}\n</complete-staged-patch>`);
+      sections.push(stagedPatchSection(request, request.evidence.compactPatch, "compact"));
     }
     sections.push("<cached-session-instruction>Continue from the supplied active session prefix. The staged manifest and stats above are authoritative. Do not mention unstaged or historical work, and do not treat session messages as proof of staged facts.</cached-session-instruction>");
   } else if (representation === "analyst") {
-    sections.push(`<complete-staged-patch authoritative=\"true\" representation=\"compact\">\n${request.evidence.compactPatch}\n</complete-staged-patch>`);
+    sections.push(stagedPatchSection(request, request.evidence.compactPatch, "compact"));
     sections.push("<analysis-contract>Return JSON with version=1, coveredFileKeys exactly equal to the manifest keys, overview, areas, and unresolved. Do not return a commit message.</analysis-contract>");
   } else {
     sections.push(`<validated-analysis advisory=\"true\">\n${JSON.stringify(analysis)}\n</validated-analysis>`);
@@ -398,6 +398,29 @@ function buildCandidateContent(
   }
   sections.push("</pi-git-commit-input>");
   return sections.join("\n\n");
+}
+
+const MAX_LISTED_OMITTED_FILES = 20;
+
+/** Wrap the compact patch, switching to an explicit partial label when evidence was skeleton-reduced. */
+function stagedPatchSection(request: CommitEvidenceRequest, patch: string, representation: string): string {
+  const partial = request.evidence.partial;
+  if (!partial || partial.omittedFiles.length === 0) {
+    return `<complete-staged-patch authoritative="true" representation="${representation}">\n${patch}\n</complete-staged-patch>`;
+  }
+  const listed = partial.omittedFiles
+    .slice(0, MAX_LISTED_OMITTED_FILES)
+    .map((file) => `${file.path} (+${file.addedLines} -${file.deletedLines})`)
+    .join(", ");
+  const overflow = partial.omittedFiles.length - MAX_LISTED_OMITTED_FILES;
+  const omittedList = overflow > 0 ? `${listed}, and ${overflow} more` : listed;
+  return [
+    `<partial-staged-patch authoritative="true" representation="${representation}">`,
+    `The complete staged diff was ${partial.originalCompactBytes.toLocaleString()} bytes and exceeded the input cap, so change bodies were omitted for ${partial.omittedFiles.length} file(s): ${omittedList}.`,
+    "Every changed file remains listed in the authoritative staged manifest and statistics above. Omitted bodies are marked inline with '@@ pi-git: change bodies omitted'. Do not claim details about omitted bodies.",
+    patch,
+    "</partial-staged-patch>",
+  ].join("\n");
 }
 
 /** Return the analysis-final specs in intent-first order. */

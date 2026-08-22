@@ -101,10 +101,13 @@ export function validateCommitResponse(
   limits: CommitMessageLimits = {},
 ): CommitMessageValidation {
   if (response.stopReason !== "stop") {
+    const detail = response.errorMessage
+      ? `: ${response.errorMessage.length > 400 ? `${response.errorMessage.slice(0, 400)}…` : response.errorMessage}`
+      : ".";
     return {
       ok: false,
       code: "wrong-stop-reason",
-      reason: `Model stopped with ${response.stopReason}, not stop.`,
+      reason: `Model stopped with ${response.stopReason}, not stop${detail}`,
     };
   }
 

@@ -218,6 +218,7 @@ export class SmartCommitSession {
           session: reusableSession.session,
           cacheConfidence: reusableSession.cacheConfidence,
         }),
+        ...(ctx.thinkingLevel === undefined ? {} : { reasoning: ctx.thinkingLevel }),
       });
       if (!generated) return "cancelled";
       if (!generated.ok) {
@@ -314,6 +315,7 @@ async function rewriteMessage(
     style,
     ...(intent === undefined ? {} : { intent }),
     operation: { kind: "rewrite", currentMessage, instruction },
+    ...(ctx.thinkingLevel === undefined ? {} : { reasoning: ctx.thinkingLevel }),
   });
   if (!generated) return undefined;
   if (!generated.ok) {
