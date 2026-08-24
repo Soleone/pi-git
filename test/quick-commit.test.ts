@@ -60,13 +60,16 @@ function fakeGit(options: {
   } as unknown as GitService;
 }
 
-function ui(): { ui: QuickCommitUi; notices: string[] } {
+function ui(): { ui: QuickCommitUi; notices: string[]; statuses: Array<{ key: string; text?: string | undefined }> } {
   const notices: string[] = [];
+  const statuses: Array<{ key: string; text?: string | undefined }> = [];
   return {
     notices,
+    statuses,
     ui: {
       isAlive: () => true,
       notify: (message) => notices.push(message),
+      setStatus: (key, text) => statuses.push({ key, text }),
     },
   };
 }
@@ -94,8 +97,9 @@ describe("QuickCommitController", () => {
     });
 
     expect(started.accepted).toBe(true);
-    expect(surface.notices).toContain("Quick commit: committing...");
+    expect(surface.notices).toEqual([]);
     await tick();
+    expect(surface.statuses.some((entry) => entry.key === "pi-git:quick-commit" && entry.text?.includes("quick commit"))).toBe(true);
     expect(controller.state).toBe("drafting");
     expect(controller.job?.isSettled).toBe(false);
 
@@ -139,7 +143,7 @@ describe("QuickCommitController", () => {
     await controller.job?.wait();
 
     expect(controller.state).toBe("succeeded");
-    expect(surface.notices).toContain("Quick commit: complete\n  feat: test state transitions");
+    expect(surface.notices).toContain("\uF00C Quick commit: complete\n  feat: test state transitions");
     expect(temporaryPath).not.toBe("");
     await expect(fs.access(temporaryPath)).rejects.toThrow();
   });

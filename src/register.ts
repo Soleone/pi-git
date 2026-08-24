@@ -37,6 +37,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
   const makeUi = (ctx: ExtensionContext): QuickCommitUi => ({
     isAlive: () => alive && ctx.mode === "tui",
     notify: (message, level) => ctx.ui.notify(message, level),
+    setStatus: (key, text) => ctx.ui.setStatus(key, text),
   });
 
   const requireTui = (ctx: ExtensionContext): boolean => {

@@ -43,6 +43,8 @@ export interface QuickCommitModelRegistry {
 export interface QuickCommitUi {
   readonly isAlive: () => boolean;
   readonly notify: (message: string, level: "info" | "warning" | "error") => void;
+  /** Optional footer status surface used for the live quick-commit indicator. */
+  readonly setStatus?: (key: string, text: string | undefined) => void;
 }
 
 export interface QuickCommitStartRequest {
@@ -96,6 +98,23 @@ interface TempMessageFile {
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
+const STATUS_KEY = "pi-git:quick-commit";
+/** nf-fa-git */
+const GIT_ICON = "\uF1D3";
+/** nf-fa-check */
+const CHECK_ICON = "\uF00C";
+/** Same braille frames pi's own working spinner uses. */
+const SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"] as const;
+const STATUS_INTERVAL_MS = 100;
+
+const PHASE_LABELS: Partial<Record<QuickCommitState, string>> = {
+  staging: "staging",
+  drafting: "drafting message",
+  validating: "validating",
+  finalizing: "finalizing",
+  committing: "committing",
+};
+
 const SETTLED_STATES: ReadonlySet<QuickCommitState> = new Set([
   "succeeded",
   "cancelled",
@@ -118,6 +137,9 @@ export class QuickCommitJob {
   private deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   private settledValue = false;
   private readonly settledPromise: Promise<QuickCommitState>;
+  private statusTimer: ReturnType<typeof setInterval> | undefined;
+  private spinnerFrame = 0;
+  private startedAt = 0;
   private settle!: (state: QuickCommitState) => void;
   private subject = "";
   private diagnosticsValue: CommitGenerationDiagnostics | undefined;
@@ -155,6 +177,7 @@ export class QuickCommitJob {
   start(): void {
     // The caller intentionally does not await this promise. The catch at the
     // boundary prevents a rejected background task from becoming unhandled.
+    this.startStatusAnimation();
     void this.run().catch((error: unknown) => this.fail(error));
   }
 
@@ -178,7 +201,6 @@ export class QuickCommitJob {
         return;
       }
 
-      this.notify("Quick commit: capturing staged evidence…", "info");
       const staged = await this.awaitAbortable<StagedEvidence>(captureStagedEvidence(this.request.git, this.abortController.signal));
       if (staged.partial) {
         this.notify(`Quick commit: large staged diff (${staged.partial.originalCompactBytes.toLocaleString()} bytes); using reduced evidence.`, "info");
@@ -234,7 +256,7 @@ export class QuickCommitJob {
       if (commitError) throw commitError;
 
       this.finish("succeeded");
-      this.notify(`Quick commit: complete\n  ${this.subject}`, "info");
+      this.notify(`${CHECK_ICON} Quick commit: complete\n  ${this.subject}`, "info");
     } catch (error: unknown) {
       this.fail(error);
     } finally {
@@ -297,20 +319,54 @@ export class QuickCommitJob {
     }
 
     this.finish("succeeded");
-    this.notify(`Quick commit: complete\n  ${subject}`, "info");
+    this.notify(`${CHECK_ICON} Quick commit: complete\n  ${subject}`, "info");
   }
 
   private transition(next: QuickCommitState): void {
     this.stateValue = next;
   }
 
+  /** Live footer indicator; the phase label tracks stateValue on every tick. */
+  private startStatusAnimation(): void {
+    const ui = this.request.ui;
+    const setStatus = ui.setStatus;
+    if (!setStatus || this.statusTimer) return;
+    this.startedAt = Date.now();
+    this.spinnerFrame = 0;
+    const renderFrame = (): void => {
+      const spinner = SPINNER_FRAMES[this.spinnerFrame % SPINNER_FRAMES.length];
+      this.spinnerFrame += 1;
+      const elapsedSeconds = Math.floor((Date.now() - this.startedAt) / 1000);
+      const phase = PHASE_LABELS[this.stateValue] ?? this.stateValue;
+      setStatus(STATUS_KEY, `${GIT_ICON} quick commit: ${phase} ${spinner} ${elapsedSeconds}s`);
+    };
+    renderFrame();
+    this.statusTimer = setInterval(() => {
+      if (!ui.isAlive()) {
+        this.stopStatusAnimation();
+        return;
+      }
+      renderFrame();
+    }, STATUS_INTERVAL_MS);
+  }
+
+  private stopStatusAnimation(): void {
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer);
+      this.statusTimer = undefined;
+    }
+    this.request.ui.setStatus?.(STATUS_KEY, undefined);
+  }
+
   private finish(state: "succeeded" | "stale"): void {
     this.stateValue = state;
+    this.stopStatusAnimation();
     this.resolveIfNeeded();
   }
 
   private fail(error: unknown): void {
     if (this.settledValue) return;
+    this.stopStatusAnimation();
 
     if (this.cancellationRequested || error instanceof QuickCommitCancelled || isAbortError(error)) {
       this.stateValue = "cancelled";
@@ -435,7 +491,6 @@ export class QuickCommitController {
     const job = new QuickCommitJob(request);
     this.current = job;
     job.start();
-    this.notify(request.ui, "Quick commit: committing...", "info");
     return { accepted: true, job };
   }
 
