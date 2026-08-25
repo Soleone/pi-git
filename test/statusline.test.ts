@@ -30,7 +30,7 @@ describe("registerStatusline", () => {
     expect(events).toContain("session_shutdown");
   });
 
-  it("keeps extension status messages out of the custom footer", async () => {
+  it("renders extension status messages on their own footer line", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
     type Handler = (...args: unknown[]) => unknown;
@@ -107,7 +107,7 @@ describe("registerStatusline", () => {
     expect(themed).toContainEqual({ color: "muted", text: "⏱" });
     expect(themed).toContainEqual({ color: "muted", text: "Started" });
     expect(plainRendered).toContain("$0.25 ⚡5M ↑502k ↓600 TTL 02:14  ⏱ 0m  Started ");
-    expect(plainRendered).toMatch(/Started \d{2}:\d{2}$/);
+    expect(plainRendered).toMatch(/Started \d{2}:\d{2}$/m);
     vi.setSystemTime(1_166_000);
     footer.render(200);
     expect(themed).toContainEqual({ color: "warning", text: "05:00" });
@@ -116,7 +116,10 @@ describe("registerStatusline", () => {
     expect(rendered).toContain("\x1b[38;2;102;255;0m▰");
     expect(rendered).toContain("\x1b[38;2;100;100;100m▱");
     expect(rendered).not.toContain("\x1b[38;2;255;0;0m▰");
-    expect(rendered).not.toContain("Quick commit");
+    const statusLines = plainRendered.split("\n");
+    expect(statusLines.length).toBeGreaterThan(1);
+    expect(statusLines[1]).toContain("Quick commit: hidden");
+    expect(themed).toContainEqual({ color: "text", text: "Quick commit: hidden" });
 
     const sessionShutdown = handlers.get("session_shutdown");
     if (!sessionShutdown) throw new Error("session_shutdown handler was not registered");

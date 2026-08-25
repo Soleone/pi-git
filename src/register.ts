@@ -16,7 +16,7 @@ import { registerStatusline } from "../statusline.js";
 
 export function registerPiGit(pi: ExtensionAPI): void {
   const shortcutLoad = loadShortcutConfig();
-  registerStatusline(pi, shortcutLoad.config.customFooter);
+  const statusline = registerStatusline(pi, shortcutLoad.config.customFooter);
   const quickCommits = new QuickCommitController();
   const smartCommit = new SmartCommitSession();
   let alive = true;
@@ -37,7 +37,10 @@ export function registerPiGit(pi: ExtensionAPI): void {
   const makeUi = (ctx: ExtensionContext): QuickCommitUi => ({
     isAlive: () => alive && ctx.mode === "tui",
     notify: (message, level) => ctx.ui.notify(message, level),
-    setStatus: (key, text) => ctx.ui.setStatus(key, text),
+    setStatus: (key, text) => {
+      ctx.ui.setStatus(key, text);
+      statusline.requestRender();
+    },
   });
 
   const requireTui = (ctx: ExtensionContext): boolean => {

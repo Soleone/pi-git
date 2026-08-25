@@ -2,8 +2,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
-export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
-  if (!enabled) return;
+export function registerStatusline(pi: ExtensionAPI, enabled = true): { requestRender: () => void } {
+  const api = { requestRender: () => requestFooterRender?.() };
+  if (!enabled) return api;
   let sessionStarted = Date.now();
   let sessionElapsed = formatSessionDuration(0);
   let sessionStartLabel = formatSessionStart(sessionStarted);
@@ -129,7 +130,7 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
               theme.fg("muted", "Started") +
               theme.fg("dim", ` ${sessionStartLabel}`),
           ].join("");
-          return [truncateToWidth(line, width)];
+          return [truncateToWidth(line, width), ...renderExtensionStatuses(width, footerData, (text) => theme.fg("text", text))];
         },
       };
     });
@@ -161,6 +162,21 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): void {
       sessionTimer = undefined;
     }
   });
+
+  return api;
+}
+
+/** Extension status keys hidden from the custom footer (noisy one-line indicators). */
+const SUPPRESSED_EXTENSION_STATUSES = new Set(["goosedump", "venice"]);
+
+function renderExtensionStatuses(
+  width: number,
+  footerData: { getExtensionStatuses: () => ReadonlyMap<string, string> },
+  colorize: (text: string) => string,
+): string[] {
+  return Array.from(footerData.getExtensionStatuses().entries())
+    .filter(([key, text]) => !SUPPRESSED_EXTENSION_STATUSES.has(key) && text.trim().length > 0)
+    .map(([, text]) => truncateToWidth(colorize(text), width));
 }
 
 function isAssistantEntry(value: unknown): value is { message: AssistantMessage } {
