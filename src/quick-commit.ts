@@ -338,7 +338,7 @@ export class QuickCommitJob {
       this.spinnerFrame += 1;
       const elapsedSeconds = Math.floor((Date.now() - this.startedAt) / 1000);
       const phase = PHASE_LABELS[this.stateValue] ?? this.stateValue;
-      setStatus(STATUS_KEY, `${GIT_ICON} quick commit: ${phase} ${spinner} ${elapsedSeconds}s`);
+      setStatus(STATUS_KEY, `${spinner} ${GIT_ICON} quick commit: ${phase} ${elapsedSeconds}s`);
     };
     renderFrame();
     this.statusTimer = setInterval(() => {
