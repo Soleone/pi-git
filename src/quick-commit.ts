@@ -99,8 +99,8 @@ interface TempMessageFile {
 const DEFAULT_TIMEOUT_MS = 180_000;
 
 const STATUS_KEY = "pi-git:quick-commit";
-/** nf-fa-git */
-const GIT_ICON = "\uF1D3";
+/** nf-cod-git_pull_request */
+const GIT_ICON = "\uEA64";
 /** nf-fa-check */
 const CHECK_ICON = "\uF00C";
 /** Same braille frames pi's own working spinner uses. */
