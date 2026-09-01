@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { compactTokenCount } from "./src/usage-format.js";
 
 export function registerStatusline(pi: ExtensionAPI, enabled = true): { requestRender: () => void } {
   const api = { requestRender: () => requestFooterRender?.() };
@@ -111,13 +112,13 @@ export function registerStatusline(pi: ExtensionAPI, enabled = true): { requestR
               theme.fg("dim", cost.toFixed(2)) +
               theme.fg("dim", " ") +
               theme.fg("muted", "⚡") +
-              theme.fg("dim", compactNumber(cacheReadTokens)) +
+              theme.fg("dim", compactTokenCount(cacheReadTokens)) +
               theme.fg("dim", " ") +
               theme.fg("muted", "↑") +
-              theme.fg("dim", compactNumber(inputTokens)) +
+              theme.fg("dim", compactTokenCount(inputTokens)) +
               theme.fg("dim", " ") +
               theme.fg("muted", "↓") +
-              theme.fg("dim", compactNumber(outputTokens)) +
+              theme.fg("dim", compactTokenCount(outputTokens)) +
               (cacheTtl === undefined ? "" :
                 theme.fg("dim", " ") +
                 theme.fg("muted", "TTL") +
@@ -203,11 +204,6 @@ function contextBar(percent: number): string {
 
 function rgb(red: number, green: number, blue: number, text: string): string {
   return `\x1b[38;2;${red};${green};${blue}m${text}\x1b[0m`;
-}
-
-function compactNumber(value: number): string {
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
-  return value >= 1_000 ? `${Math.round(value / 1_000)}k` : String(value);
 }
 
 function formatTtl(milliseconds: number): string {

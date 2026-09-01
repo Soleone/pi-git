@@ -8,6 +8,7 @@ import {
 import { buildStagedFiles, summarizeStagedFiles } from "../src/evidence-parse.js";
 import { planCommitEvidence } from "../src/evidence-plan.js";
 import { salvageTruncatedCommitMessage } from "../src/commit-message.js";
+import { formatTokenTally } from "../src/usage-format.js";
 import type { StagedEvidence } from "../src/commit-evidence.js";
 
 function model(maxTokens = 4_096): Model<Api> {
@@ -78,6 +79,8 @@ function recorder(responses: AssistantMessage[]): {
     },
   };
 }
+
+const EMPTY_TALLY = { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 
 describe("size-aware output budget", () => {
   it("grows the writer reserve with the number of staged files and with reasoning", () => {
@@ -200,6 +203,28 @@ describe("truncation recovery in the generator", () => {
     expect(result.ok).toBe(true);
     expect(scripted.calls.length).toBeGreaterThan(1);
     if (result.ok) expect(result.diagnostics.attempts).toBe(2);
+  });
+
+  it("totals every call a recovery ladder makes", async () => {
+    const scripted = recorder([
+      reply("", "length", 1_800),
+      reply("feat: add json decode helpers\n\nCovers the sidecar and web decoders.", "stop", 640),
+    ]);
+    const result = await new CommitMessageGenerator(scripted.client).generate({
+      model: model(),
+      evidence: evidence(1),
+      style: "style",
+      reasoning: "low",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const usage = result.diagnostics.usage;
+      expect(usage?.calls).toBe(2);
+      expect(usage?.input).toBe(20);
+      expect(usage?.output).toBe(2_440);
+      expect(formatTokenTally(usage ?? EMPTY_TALLY, { showCalls: true })).toBe("$0.00 ⚡0 ↑20 ↓2.4k · 2 calls");
+    }
   });
 
   it("keeps every retry inside the shared call budget", async () => {

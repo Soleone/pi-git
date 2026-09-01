@@ -109,6 +109,28 @@ describe("QuickCommitController", () => {
     generation.resolve(response());
   });
 
+  it("reports the tokens spent when a draft is rejected", async () => {
+    const surface = ui();
+    const truncated: AssistantMessage = {
+      ...response(""),
+      content: [],
+      stopReason: "length",
+      usage: { ...response("").usage, output: 776 } as AssistantMessage["usage"],
+    };
+    const modelRegistry: QuickCommitModelRegistry = {
+      hasConfiguredAuth: () => true,
+      complete: vi.fn(async () => truncated),
+    };
+    const controller = new QuickCommitController();
+    controller.start({ git: fakeGit({ staged: true }), modelRegistry, model: model(), commitStyle: "style", ui: surface.ui });
+    await controller.job?.wait();
+
+    expect(controller.state).toBe("failed");
+    const failure = surface.notices.at(-1) ?? "";
+    expect(failure).toContain("output budget");
+    expect(failure).toContain("$0.00 ⚡0 ↑0 ↓1.6k · 2 calls");
+  });
+
   it("rejects a second start while the first job is active", async () => {
     const generation = deferred<AssistantMessage>();
     const modelRegistry: QuickCommitModelRegistry = {
@@ -143,7 +165,7 @@ describe("QuickCommitController", () => {
     await controller.job?.wait();
 
     expect(controller.state).toBe("succeeded");
-    expect(surface.notices).toContain("\uF00C Quick commit: complete\n  feat: test state transitions");
+    expect(surface.notices).toContain("\uF00C Quick commit: complete\n  feat: test state transitions\n  $0.00 \u26A10 \u21910 \u21930");
     expect(temporaryPath).not.toBe("");
     await expect(fs.access(temporaryPath)).rejects.toThrow();
   });

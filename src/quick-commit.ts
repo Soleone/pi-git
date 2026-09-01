@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Api, AssistantMessage, Message, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { isAbortError } from "./abort.js";
+import { formatTokenTally, type TokenTally } from "./usage-format.js";
 import { GitService, snapshotsMatch } from "./git-service.js";
 import {
   captureStagedEvidence,
@@ -85,7 +86,7 @@ class QuickCommitTimedOut extends Error {
 }
 
 class CommitMessageGenerationError extends Error {
-  constructor(readonly code: string, reason: string) {
+  constructor(readonly code: string, reason: string, readonly usage?: TokenTally) {
     super(`Generated commit message was rejected: ${reason}`);
     this.name = "CommitMessageGenerationError";
   }
@@ -218,7 +219,7 @@ export class QuickCommitJob {
       this.throwIfCancelled();
       this.transition("drafting");
       const generated = await this.completeMessage(staged, explicitOrSessionIntent);
-      if (!generated.ok) throw new CommitMessageGenerationError(generated.code, generated.reason);
+      if (!generated.ok) throw new CommitMessageGenerationError(generated.code, generated.reason, generated.diagnostics?.usage);
 
       this.throwIfCancelled();
       this.transition("validating");
@@ -256,7 +257,7 @@ export class QuickCommitJob {
       if (commitError) throw commitError;
 
       this.finish("succeeded");
-      this.notify(`${CHECK_ICON} Quick commit: complete\n  ${this.subject}${this.recoveredHint()}`, "info");
+      this.notify(`${CHECK_ICON} Quick commit: complete\n  ${this.subject}${this.recoveredHint()}${this.usageHint()}`, "info");
     } catch (error: unknown) {
       this.fail(error);
     } finally {
@@ -329,6 +330,12 @@ export class QuickCommitJob {
       : "";
   }
 
+  /** These tokens are outside the pi session, so report them where they were spent. */
+  private usageHint(): string {
+    const usage = this.diagnosticsValue?.usage;
+    return usage && usage.calls > 0 ? `\n  ${formatTokenTally(usage, { showCalls: true })}` : "";
+  }
+
   private transition(next: QuickCommitState): void {
     this.stateValue = next;
   }
@@ -390,7 +397,8 @@ export class QuickCommitJob {
     }
 
     this.stateValue = "failed";
-    this.notify(formatFailure(error), "error");
+    const spent = error instanceof CommitMessageGenerationError ? error.usage : undefined;
+    this.notify(`${formatFailure(error)}${spent && spent.calls > 0 ? `\n  ${formatTokenTally(spent, { showCalls: true })}` : ""}`, "error");
     this.resolveIfNeeded();
   }
 

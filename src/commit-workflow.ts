@@ -10,6 +10,7 @@ import {
   type CommitModelClient,
 } from "./commit-generator.js";
 import { loadCommitStyle } from "./commit-message.js";
+import { formatTokenTally, type TokenTally } from "./usage-format.js";
 import { snapshotsMatch, type GitMaybeSnapshot, type GitService } from "./git-service.js";
 import { CommitEditor, type CommitEditorResult } from "./ui/commit-editor.js";
 const GENERATION_TIMEOUT_MS = 180_000;
@@ -513,9 +514,14 @@ function notifySmartDraftReady(
   draft: { readonly message: string; readonly diagnostics: CommitGenerationDiagnostics },
 ): void {
   ctx.ui.notify(
-    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)}${draft.diagnostics.truncated ? ", recovered from a truncated reply" : ""})\n  ${firstLine(draft.message)}\nReview before committing`,
+    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)}${draft.diagnostics.truncated ? ", recovered from a truncated reply" : ""})\n  ${firstLine(draft.message)}${usageLine(draft.diagnostics.usage)}\nReview before committing`,
     "info",
   );
+}
+
+/** The tokens these model calls spent are invisible to the pi session footer. */
+function usageLine(usage: TokenTally | undefined): string {
+  return usage && usage.calls > 0 ? `\n  ${formatTokenTally(usage, { showCalls: true })}` : "";
 }
 
 function routeLabel(route: CommitRepresentation): string {
@@ -526,7 +532,8 @@ function routeLabel(route: CommitRepresentation): string {
 }
 
 function formatGenerationFailure(prefix: string, result: Extract<CommitGenerationResult, { ok: false }>): string {
-  return `${prefix} rejected: ${result.reason}`;
+  // A rejected draft still spent the tokens; show them next to the reason.
+  return `${prefix} rejected: ${result.reason}${usageLine(result.diagnostics?.usage)}`;
 }
 
 

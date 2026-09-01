@@ -7,8 +7,8 @@ import {
   type Model,
   type ModelThinkingLevel,
   type ThinkingLevel,
-  type Usage,
 } from "@earendil-works/pi-ai";
+import { TokenTallyCollector, type TokenTally } from "./usage-format.js";
 import {
   cacheConfidenceFromUsage,
   degradeStagedEvidence,
@@ -70,6 +70,14 @@ interface WriterRung {
 interface WriterCallBudget {
   calls: number;
   readonly max: number;
+  /** Token totals of every call, so a retry ladder is visible in the cost. */
+  readonly tally: TokenTallyCollector;
+  /** Analyst-phase subset, reported separately from the writer total. */
+  readonly analystTally: TokenTallyCollector;
+}
+
+function newCallBudget(): WriterCallBudget {
+  return { calls: 0, max: MAX_MODEL_CALLS_PER_GENERATION, tally: new TokenTallyCollector(), analystTally: new TokenTallyCollector() };
 }
 
 /** Calls the analyst must leave for the writer that follows it. */
@@ -111,15 +119,6 @@ export interface CommitGenerationRequest extends CommitEvidenceRequest {
   readonly reasoning?: ModelThinkingLevel | undefined;
 }
 
-export interface CommitUsageDiagnostics {
-  readonly input?: number | undefined;
-  readonly output?: number | undefined;
-  readonly cacheRead?: number | undefined;
-  readonly cacheWrite?: number | undefined;
-  readonly totalTokens?: number | undefined;
-  readonly cost?: Usage["cost"] | undefined;
-}
-
 export interface CommitGenerationDiagnostics {
   readonly route: CommitRepresentation;
   readonly intentIncluded: boolean;
@@ -128,8 +127,10 @@ export interface CommitGenerationDiagnostics {
   /** True when the message was recovered from a response the provider cut off. */
   readonly truncated?: boolean | undefined;
   readonly candidate: Pick<CommitEvidenceSpec, "representation" | "estimatedInputTokens" | "inputBudget" | "outputReserve" | "safetyReserve" | "diffBytes" | "intentIncluded">;
-  readonly usage?: CommitUsageDiagnostics | undefined;
-  readonly analystUsage?: CommitUsageDiagnostics | undefined;
+  /** Total across every model call this generation made, retries included. */
+  readonly usage?: TokenTally | undefined;
+  /** Subset of `usage` spent on the analyst phase. */
+  readonly analystUsage?: TokenTally | undefined;
 }
 
 export type CommitGenerationResult =
@@ -166,7 +167,7 @@ export class CommitMessageGenerator {
     // One budget for the whole generation: every rung, route change, and
     // evidence degradation below shares it, so a bad provider day cannot turn
     // into an unbounded series of large requests.
-    const budget: WriterCallBudget = { calls: 0, max: MAX_MODEL_CALLS_PER_GENERATION };
+    const budget: WriterCallBudget = newCallBudget();
     const result = await this.attemptGeneration(request, budget);
     // A provider can still refuse reduced evidence (smaller effective context
     // than the declared window). One bounded re-reduction attempt at half the
@@ -253,10 +254,10 @@ export class CommitMessageGenerator {
     const attempts = attempted.length as 1 | 2;
     if (outcome.kind === "failed") return outcome.failure;
     if (outcome.kind === "overflow") {
-      return this.responseFailure(outcome.response, candidate, request, attempts);
+      return this.responseFailure(outcome.response, candidate, request, attempts, budget);
     }
     if (outcome.kind === "truncated") {
-      return this.truncationFailure(outcome.response, candidate, request, attempts);
+      return this.truncationFailure(outcome.response, candidate, request, attempts, budget);
     }
 
     const response = outcome.response;
@@ -264,10 +265,10 @@ export class CommitMessageGenerator {
       ? { ok: true, message: outcome.salvage.message, subject: outcome.salvage.subject }
       : validateGeneratedResponse(response);
     if (!validation.ok) {
-      return this.validationFailure(validation, response, candidate, request, attempts);
+      return this.validationFailure(validation, response, candidate, request, attempts, budget);
     }
 
-    return this.okResult(request, candidate, validation, {
+    return this.okResult(request, candidate, validation, budget, {
       attempts,
       analysisUsed: false,
       truncated: outcome.salvage !== undefined,
@@ -283,13 +284,13 @@ export class CommitMessageGenerator {
     budget: WriterCallBudget,
   ): Promise<CommitGenerationResult> {
     const analystCandidate = materializeCandidate(evidenceRequest, analystSpec);
-    const analystOutcome = await this.runOutputLadder(request, analystCandidate, budget, ANALYST_WRITER_RESERVE_CALLS);
+    const analystOutcome = await this.runOutputLadder(request, analystCandidate, budget, { reserveForNext: ANALYST_WRITER_RESERVE_CALLS, analystPhase: true });
     if (analystOutcome.kind === "failed") return analystOutcome.failure;
     if (analystOutcome.kind === "overflow") {
-      return this.responseFailure(analystOutcome.response, analystCandidate, request, 1);
+      return this.responseFailure(analystOutcome.response, analystCandidate, request, 1, budget);
     }
     if (analystOutcome.kind === "truncated") {
-      return this.truncationFailure(analystOutcome.response, analystCandidate, request, 1);
+      return this.truncationFailure(analystOutcome.response, analystCandidate, request, 1, budget);
     }
 
     const analystResponse = analystOutcome.response;
@@ -305,7 +306,7 @@ export class CommitMessageGenerator {
           attempts: 1,
           cacheConfidence: effectiveCacheConfidence(request, analystResponse),
           candidate: analystCandidate,
-          analystUsage: usageDiagnostics(analystResponse.usage),
+          analystUsage: budget.analystTally.totals,
         },
       };
     }
@@ -327,7 +328,7 @@ export class CommitMessageGenerator {
           attempts: 1,
           cacheConfidence: request.cacheConfidence ?? "unknown",
           candidate: finalCandidates.withoutIntent,
-          analystUsage: usageDiagnostics(analystResponse.usage),
+          analystUsage: budget.analystTally.totals,
         },
       };
     }
@@ -336,10 +337,10 @@ export class CommitMessageGenerator {
     const finalOutcome = await this.runOutputLadder(request, finalCandidate, budget);
     if (finalOutcome.kind === "failed") return finalOutcome.failure;
     if (finalOutcome.kind === "overflow") {
-      return this.responseFailure(finalOutcome.response, finalCandidate, request, 2, analystResponse);
+      return this.responseFailure(finalOutcome.response, finalCandidate, request, 2, budget, analystResponse);
     }
     if (finalOutcome.kind === "truncated") {
-      return this.truncationFailure(finalOutcome.response, finalCandidate, request, 2, analystResponse);
+      return this.truncationFailure(finalOutcome.response, finalCandidate, request, 2, budget, analystResponse);
     }
 
     const finalResponse = finalOutcome.response;
@@ -347,10 +348,10 @@ export class CommitMessageGenerator {
       ? { ok: true, message: finalOutcome.salvage.message, subject: finalOutcome.salvage.subject }
       : validateGeneratedResponse(finalResponse);
     if (!finalValidation.ok) {
-      return this.validationFailure(finalValidation, finalResponse, finalCandidate, request, 2, analystResponse);
+      return this.validationFailure(finalValidation, finalResponse, finalCandidate, request, 2, budget, analystResponse);
     }
 
-    return this.okResult(request, finalCandidate, finalValidation, {
+    return this.okResult(request, finalCandidate, finalValidation, budget, {
       attempts: 2,
       analysisUsed: true,
       truncated: finalOutcome.salvage !== undefined,
@@ -364,6 +365,7 @@ export class CommitMessageGenerator {
     request: CommitGenerationRequest,
     candidate: CommitEvidenceSpec,
     validation: Extract<CommitMessageValidation, { ok: true }>,
+    budget: WriterCallBudget,
     meta: {
       readonly attempts: 1 | 2;
       readonly analysisUsed: boolean;
@@ -388,8 +390,8 @@ export class CommitMessageGenerator {
         cacheConfidence: effectiveCacheConfidence(request, meta.response),
         ...(meta.truncated ? { truncated: true } : {}),
         candidate: candidateDiagnostics(candidate),
-        usage: usageDiagnostics(meta.response.usage),
-        ...(meta.analystResponse === undefined ? {} : { analystUsage: usageDiagnostics(meta.analystResponse.usage) }),
+        usage: budget.tally.totals,
+        ...(meta.analystResponse === undefined ? {} : { analystUsage: budget.analystTally.totals }),
       },
     };
   }
@@ -408,8 +410,10 @@ export class CommitMessageGenerator {
     request: CommitGenerationRequest,
     candidate: CommitEvidenceCandidate,
     budget: WriterCallBudget,
-    reserveForNext = 0,
+    options: { readonly reserveForNext?: number; readonly analystPhase?: boolean } = {},
   ): Promise<WriterOutcome> {
+    const reserveForNext = options.reserveForNext ?? 0;
+    const phaseTally = options.analystPhase ? budget.analystTally : budget.tally;
     // Only the writer route is worth salvaging; analyst JSON cannot be repaired
     // line by line, so it just walks the budget rungs.
     const salvage = candidate.representation !== "analyst";
@@ -427,6 +431,7 @@ export class CommitMessageGenerator {
         break;
       }
       const response = result.response;
+      phaseTally.add(response.usage);
 
       if (isContextOverflow(response, modelContextWindow(request.model) ?? 0)) {
         return { kind: "overflow", response };
@@ -501,6 +506,7 @@ export class CommitMessageGenerator {
     candidate: CommitEvidenceSpec,
     request: CommitGenerationRequest,
     attempts: 1 | 2,
+    budget: WriterCallBudget,
     analystResponse?: AssistantMessage,
   ): Extract<CommitGenerationResult, { ok: false }> {
     const overflow = isContextOverflow(response, modelContextWindow(request.model) ?? 0);
@@ -519,8 +525,8 @@ export class CommitMessageGenerator {
         attempts,
         cacheConfidence: effectiveCacheConfidence(request, response),
         candidate,
-        usage: usageDiagnostics(response.usage),
-        ...(analystResponse === undefined ? {} : { analystUsage: usageDiagnostics(analystResponse.usage) }),
+        usage: budget.tally.totals,
+        ...(analystResponse === undefined ? {} : { analystUsage: budget.analystTally.totals }),
       },
     };
   }
@@ -531,6 +537,7 @@ export class CommitMessageGenerator {
     candidate: CommitEvidenceSpec,
     request: CommitGenerationRequest,
     attempts: 1 | 2,
+    budget: WriterCallBudget,
     analystResponse?: AssistantMessage,
   ): Extract<CommitGenerationResult, { ok: false }> {
     const detail = response.errorMessage
@@ -546,8 +553,8 @@ export class CommitMessageGenerator {
         attempts,
         cacheConfidence: effectiveCacheConfidence(request, response),
         candidate,
-        usage: usageDiagnostics(response.usage),
-        ...(analystResponse === undefined ? {} : { analystUsage: usageDiagnostics(analystResponse.usage) }),
+        usage: budget.tally.totals,
+        ...(analystResponse === undefined ? {} : { analystUsage: budget.analystTally.totals }),
       },
     };
   }
@@ -558,6 +565,7 @@ export class CommitMessageGenerator {
     candidate: CommitEvidenceSpec,
     request: CommitGenerationRequest,
     attempts: 1 | 2,
+    budget: WriterCallBudget,
     analystResponse?: AssistantMessage,
   ): Extract<CommitGenerationResult, { ok: false }> {
     return {
@@ -570,8 +578,8 @@ export class CommitMessageGenerator {
         attempts,
         cacheConfidence: effectiveCacheConfidence(request, response),
         candidate,
-        usage: usageDiagnostics(response.usage),
-        ...(analystResponse === undefined ? {} : { analystUsage: usageDiagnostics(analystResponse.usage) }),
+        usage: budget.tally.totals,
+        ...(analystResponse === undefined ? {} : { analystUsage: budget.analystTally.totals }),
       },
     };
   }
@@ -635,22 +643,6 @@ function reasoningOptions(level: CommitGenerationRequest["reasoning"]):
   if (level === undefined || level === "off") return {};
   const capped: ThinkingLevel = level === "minimal" ? "minimal" : "low";
   return { reasoning: capped, reasoningEffort: capped };
-}
-
-function usageDiagnostics(usage: Usage | undefined): CommitUsageDiagnostics | undefined {
-  if (!usage || typeof usage !== "object") return undefined;
-  return {
-    input: finiteNumber(usage.input),
-    output: finiteNumber(usage.output),
-    cacheRead: finiteNumber(usage.cacheRead),
-    cacheWrite: finiteNumber(usage.cacheWrite),
-    totalTokens: finiteNumber(usage.totalTokens),
-    cost: usage.cost,
-  };
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export type ParsedDiffAnalysis =

@@ -1,0 +1,73 @@
+/**
+ * Token accounting for pi-git's own model calls. These requests never appear in
+ * the pi session footer, so a commit draft would otherwise be an invisible bill.
+ */
+import type { Usage } from "@earendil-works/pi-ai";
+
+export interface TokenTally {
+  readonly calls: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly cost: number;
+}
+
+interface TallyDraft {
+  calls: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+}
+
+/** Accumulates the usage of every model call one generation makes. */
+export class TokenTallyCollector {
+  private readonly draft: TallyDraft = { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+
+  add(usage: Usage | undefined): void {
+    if (!usage) return;
+    this.draft.calls += 1;
+    this.draft.input += count(usage.input);
+    this.draft.output += count(usage.output);
+    this.draft.cacheRead += count(usage.cacheRead);
+    this.draft.cacheWrite += count(usage.cacheWrite);
+    this.draft.cost += count(usage.cost?.total);
+  }
+
+  get totals(): TokenTally {
+    return { ...this.draft };
+  }
+}
+
+/**
+ * Compact footer shape: `$0.00 ⚡19M ↑264k ↓86k`, where ⚡ is cache read and
+ * an appended `+4k` is cache write. Trailing `· 2 calls` only appears when a
+ * retry ladder spent more than one request.
+ */
+export function formatTokenTally(tally: TokenTally, options: { readonly showCalls?: boolean } = {}): string {
+  if (tally.calls === 0) return "no model calls";
+  const cached = `⚡${compactTokenCount(tally.cacheRead)}${tally.cacheWrite > 0 ? `/+${compactTokenCount(tally.cacheWrite)}` : ""}`;
+  const parts = [
+    `$${tally.cost < 1 ? tally.cost.toFixed(2) : tally.cost.toFixed(1)}`,
+    cached,
+    `↑${compactTokenCount(tally.input)}`,
+    `↓${compactTokenCount(tally.output)}`,
+  ];
+  if (options.showCalls && tally.calls > 1) parts.push(`\u00b7 ${tally.calls} calls`);
+  return parts.join(" ");
+}
+
+export function compactTokenCount(value: number): string {
+  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
+  // Keep one decimal below 10k, where rounding to whole kilo would hide a third
+  // of the spend on the small requests this extension makes.
+  if (value >= 10_000) return `${Math.round(value / 1_000)}k`;
+  if (value >= 1_000) return `${Math.round(value / 100) / 10}k`;
+  return String(value);
+}
+
+function count(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
