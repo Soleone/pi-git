@@ -2,7 +2,7 @@
  * Cost-aware route planning for commit generation. Describes every candidate
  * representation cheaply, selects one, and only then materializes its prompt.
  */
-import type { Api, Message, Model, UserMessage } from "@earendil-works/pi-ai";
+import type { Api, Message, Model, ModelThinkingLevel, UserMessage } from "@earendil-works/pi-ai";
 import {
   COMMIT_SPECIFIC_SYSTEM_PROMPT,
   DIFF_ANALYST_SYSTEM_PROMPT,
@@ -24,8 +24,16 @@ import type {
 export type CommitRepresentation = "context" | "compact" | "cached-session" | "analyst-assisted";
 export type CandidateRepresentation = "context" | "compact" | "cached-session" | "analyst" | "analysis-final";
 
-export const DEFAULT_FINAL_OUTPUT_TOKENS = 512;
-export const DEFAULT_ANALYST_OUTPUT_TOKENS = 768;
+/** Writer budgets. A 100-file change legitimately needs a longer message than a 1-file change. */
+export const MIN_FINAL_OUTPUT_TOKENS = 768;
+export const MAX_FINAL_OUTPUT_TOKENS = 4_096;
+export const FINAL_OUTPUT_TOKENS_PER_FILE = 8;
+/** Analyst budgets. The JSON contract repeats every manifest key. */
+export const MIN_ANALYST_OUTPUT_TOKENS = 1_024;
+export const MAX_ANALYST_OUTPUT_TOKENS = 8_192;
+export const ANALYST_OUTPUT_TOKENS_PER_FILE = 16;
+/** Reasoning and the answer share one completion budget on OpenAI-style endpoints. */
+export const REASONING_OUTPUT_ALLOWANCE_TOKENS = 1_024;
 export const MIN_SAFETY_RESERVE_TOKENS = 2_048;
 export const FRESH_DIFF_INPUT_TOKEN_BUDGET = 8_192;
 export const MAX_CACHED_COMPACT_BYTES = 16 * 1024;
@@ -60,6 +68,8 @@ export interface CommitEvidenceRequest {
   readonly operation?: CommitOperation | undefined;
   readonly session?: CommitSessionContext | undefined;
   readonly cacheConfidence?: CacheConfidence | undefined;
+  /** Session thinking level. Only used to reserve output tokens for reasoning. */
+  readonly reasoning?: ModelThinkingLevel | undefined;
 }
 
 export interface CommitEvidencePlan {
@@ -85,7 +95,7 @@ export function modelContextWindow(model: Model<Api>): number | undefined {
   return Math.floor(candidate);
 }
 
-function modelMaxTokens(model: Model<Api>, fallback: number): number {
+export function modelMaxTokens(model: Model<Api>, fallback: number): number {
   const candidate = (model as Model<Api> & { maxTokens?: unknown }).maxTokens;
   return typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0
     ? Math.floor(candidate)
@@ -96,9 +106,35 @@ export function commitSafetyReserve(contextWindow: number): number {
   return Math.max(MIN_SAFETY_RESERVE_TOKENS, Math.ceil(contextWindow * 0.15));
 }
 
-export function commitOutputReserve(model: Model<Api>, analyst: boolean): number {
-  const fallback = analyst ? DEFAULT_ANALYST_OUTPUT_TOKENS : DEFAULT_FINAL_OUTPUT_TOKENS;
-  return Math.min(analyst ? DEFAULT_ANALYST_OUTPUT_TOKENS : DEFAULT_FINAL_OUTPUT_TOKENS, modelMaxTokens(model, fallback));
+export interface CommitOutputBudget {
+  readonly analyst: boolean;
+  readonly fileCount: number;
+  readonly reasoning: boolean;
+}
+
+/**
+ * Size the completion budget from the change itself instead of one flat cap.
+ * The input side already degrades across representations; a flat 512-token
+ * reserve made large staged changes fail with `stopReason: "length"`.
+ */
+export function commitOutputReserve(model: Model<Api>, budget: CommitOutputBudget): number {
+  const floor = budget.analyst ? MIN_ANALYST_OUTPUT_TOKENS : MIN_FINAL_OUTPUT_TOKENS;
+  const hardCap = budget.analyst ? MAX_ANALYST_OUTPUT_TOKENS : MAX_FINAL_OUTPUT_TOKENS;
+  const perFile = budget.analyst ? ANALYST_OUTPUT_TOKENS_PER_FILE : FINAL_OUTPUT_TOKENS_PER_FILE;
+  const ceiling = Math.min(hardCap, modelMaxTokens(model, floor));
+  const needed = floor
+    + Math.max(0, budget.fileCount) * perFile
+    + (budget.reasoning ? REASONING_OUTPUT_ALLOWANCE_TOKENS : 0);
+  return Math.min(ceiling, Math.max(floor, needed));
+}
+
+/** Double a spent output budget without passing the model's own ceiling. */
+export function nextCommitOutputReserve(reserve: number, model: Model<Api>, analyst: boolean): number {
+  const hardCap = Math.min(
+    analyst ? MAX_ANALYST_OUTPUT_TOKENS : MAX_FINAL_OUTPUT_TOKENS,
+    modelMaxTokens(model, reserve),
+  );
+  return reserve >= hardCap ? reserve : Math.min(hardCap, reserve * 2);
 }
 
 /** Describe every candidate route in the deterministic order, without building prompts. */
@@ -152,7 +188,7 @@ export function planCommitEvidence(request: CommitEvidenceRequest): CommitEviden
   }
 
   const safetyReserve = commitSafetyReserve(contextWindow);
-  if (contextWindow <= safetyReserve + commitOutputReserve(request.model, false)) {
+  if (contextWindow <= safetyReserve + commitOutputReserve(request.model, outputBudget(request, false))) {
     return {
       contextWindow,
       safetyReserve,
@@ -257,7 +293,7 @@ function makeSpec(
   const analyst = representation === "analyst";
   const intentIncluded = analyst || representation === "cached-session" ? false : route.intentIncluded;
   const cachedPatch = route.cachedPatch ?? false;
-  const outputReserve = commitOutputReserve(request.model, analyst);
+  const outputReserve = commitOutputReserve(request.model, outputBudget(request, analyst));
   const inputBudget = Math.max(0, contextWindow - outputReserve - safetyReserve);
   const sessionPrefixTokens = representation === "cached-session" && request.session
     ? estimateSessionPrefixTokens(request.session)
@@ -317,6 +353,14 @@ export function materializeCandidate(
     ? [...request.session.messages, userMessage]
     : [userMessage];
   return { ...spec, systemPrompt, userMessage, contextMessages };
+}
+
+function outputBudget(request: CommitEvidenceRequest, analyst: boolean): CommitOutputBudget {
+  return {
+    analyst,
+    fileCount: request.evidence.files.length,
+    reasoning: request.reasoning !== undefined && request.reasoning !== "off",
+  };
 }
 
 function reusableSessionAvailable(request: CommitEvidenceRequest): boolean {

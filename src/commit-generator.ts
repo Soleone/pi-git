@@ -1,6 +1,6 @@
 import {
+  getOverflowPatterns,
   isContextOverflow,
-  isRecoverableLength,
   type Api,
   type AssistantMessage,
   type Message,
@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   cacheConfidenceFromUsage,
+  degradeStagedEvidence,
   MAX_ANALYSIS_BYTES,
   reduceStagedEvidence,
   type CacheConfidence,
@@ -24,6 +25,7 @@ import {
   candidateForAnalysisFinal,
   materializeCandidate,
   modelContextWindow,
+  nextCommitOutputReserve,
   planCommitEvidence,
   type CommitEvidenceCandidate,
   type CommitEvidencePlan,
@@ -32,7 +34,13 @@ import {
   type CommitRepresentation,
 } from "./evidence-plan.js";
 import { isAbortError } from "./abort.js";
-import { shortenCommitMessageSubject, validateCommitResponse, type CommitMessageValidation } from "./commit-message.js";
+import {
+  salvageTruncatedCommitMessage,
+  shortenCommitMessageSubject,
+  validateCommitResponse,
+  type CommitMessageValidation,
+  type TruncatedCommitMessage,
+} from "./commit-message.js";
 
 export interface CommitModelClient {
   complete(
@@ -46,6 +54,54 @@ export interface CommitModelClient {
       reasoningEffort?: ThinkingLevel;
     },
   ): Promise<AssistantMessage>;
+}
+
+/**
+ * Bound every recovery retry. Large prompts cost ~30s per call, and quick
+ * commit aborts at 180s, so three requests is the practical ceiling.
+ */
+export const MAX_MODEL_CALLS_PER_GENERATION = 3;
+
+interface WriterRung {
+  readonly reserve: number;
+  readonly reasoning: ModelThinkingLevel | undefined;
+}
+
+interface WriterCallBudget {
+  calls: number;
+  readonly max: number;
+}
+
+/** Calls the analyst must leave for the writer that follows it. */
+const ANALYST_WRITER_RESERVE_CALLS = 2;
+
+type WriterOutcome =
+  | { readonly kind: "success"; readonly response: AssistantMessage; readonly salvage?: TruncatedCommitMessage | undefined }
+  | { readonly kind: "overflow"; readonly response: AssistantMessage }
+  | { readonly kind: "truncated"; readonly response: AssistantMessage }
+  | { readonly kind: "failed"; readonly failure: Extract<CommitGenerationResult, { ok: false }> };
+
+/**
+ * Ordered budgets for one prompt: the planned reserve, a doubled reserve for a
+ * model that simply needed more room, and a reasoning-free rung at that reserve
+ * for endpoints where thinking competes with the answer for the same tokens.
+ */
+export function outputLadderRungs(
+  request: Pick<CommitGenerationRequest, "model" | "reasoning">,
+  candidate: CommitEvidenceSpec,
+): WriterRung[] {
+  const analyst = candidate.representation === "analyst";
+  const reasoning = request.reasoning;
+  const reserve = candidate.outputReserve;
+  const rungs: WriterRung[] = [{ reserve, reasoning }];
+
+  const escalated = nextCommitOutputReserve(reserve, request.model, analyst);
+  if (escalated > reserve) rungs.push({ reserve: escalated, reasoning });
+
+  if (reasoning !== undefined && reasoning !== "off") {
+    rungs.push({ reserve: rungs[rungs.length - 1]?.reserve ?? reserve, reasoning: undefined });
+  }
+  return rungs;
 }
 
 export interface CommitGenerationRequest extends CommitEvidenceRequest {
@@ -69,6 +125,8 @@ export interface CommitGenerationDiagnostics {
   readonly intentIncluded: boolean;
   readonly attempts: 1 | 2;
   readonly cacheConfidence: CacheConfidence;
+  /** True when the message was recovered from a response the provider cut off. */
+  readonly truncated?: boolean | undefined;
   readonly candidate: Pick<CommitEvidenceSpec, "representation" | "estimatedInputTokens" | "inputBudget" | "outputReserve" | "safetyReserve" | "diffBytes" | "intentIncluded">;
   readonly usage?: CommitUsageDiagnostics | undefined;
   readonly analystUsage?: CommitUsageDiagnostics | undefined;
@@ -105,20 +163,32 @@ export class CommitMessageGenerator {
   constructor(private readonly client: CommitModelClient) {}
 
   async generate(request: CommitGenerationRequest): Promise<CommitGenerationResult> {
-    const result = await this.attemptGeneration(request);
+    // One budget for the whole generation: every rung, route change, and
+    // evidence degradation below shares it, so a bad provider day cannot turn
+    // into an unbounded series of large requests.
+    const budget: WriterCallBudget = { calls: 0, max: MAX_MODEL_CALLS_PER_GENERATION };
+    const result = await this.attemptGeneration(request, budget);
     // A provider can still refuse reduced evidence (smaller effective context
     // than the declared window). One bounded re-reduction attempt at half the
-    // bytes before giving up.
-    if (!result.ok && result.code !== "aborted" && request.evidence.partial) {
-      const reduced = reduceStagedEvidence(request.evidence, Math.floor(request.evidence.compactBytes / 2));
-      if (reduced) {
-        return this.attemptGeneration({ ...request, evidence: reduced });
+    // bytes before giving up. Size pressure on an unreduced patch also gets one
+    // chance at an explicitly labeled skeleton projection.
+    if (!result.ok && result.code !== "aborted") {
+      const reduced = request.evidence.partial
+        ? reduceStagedEvidence(request.evidence, Math.floor(request.evidence.compactBytes / 2))
+        : sizePressureFailure(result.code)
+          ? degradeStagedEvidence(request.evidence)
+          : undefined;
+      if (reduced && budget.calls < budget.max) {
+        const retry = await this.attemptGeneration({ ...request, evidence: reduced }, budget);
+        // Keep the original, more specific failure unless the retry helped.
+        if (retry.ok || retry.code === "aborted") return retry;
+        return result;
       }
     }
     return result;
   }
 
-  private async attemptGeneration(request: CommitGenerationRequest): Promise<CommitGenerationResult> {
+  private async attemptGeneration(request: CommitGenerationRequest, budget: WriterCallBudget): Promise<CommitGenerationResult> {
     const evidenceRequest: CommitEvidenceRequest = {
       model: request.model,
       evidence: request.evidence,
@@ -127,6 +197,7 @@ export class CommitMessageGenerator {
       ...(request.operation === undefined ? {} : { operation: request.operation }),
       ...(request.session === undefined ? {} : { session: request.session }),
       ...(request.cacheConfidence === undefined ? {} : { cacheConfidence: request.cacheConfidence }),
+      ...(request.reasoning === undefined ? {} : { reasoning: request.reasoning }),
     };
     const plan = planCommitEvidence(evidenceRequest);
     if (plan.failure) {
@@ -145,9 +216,9 @@ export class CommitMessageGenerator {
 
     const route = routeForCandidate(selected);
     if (route === "analyst-assisted") {
-      return this.generateWithAnalyst(request, evidenceRequest, plan, selected);
+      return this.generateWithAnalyst(request, evidenceRequest, plan, selected, budget);
     }
-    return this.generateDirect(request, evidenceRequest, plan, selected);
+    return this.generateDirect(request, evidenceRequest, plan, selected, budget);
   }
 
   private async generateDirect(
@@ -155,53 +226,53 @@ export class CommitMessageGenerator {
     evidenceRequest: CommitEvidenceRequest,
     plan: CommitEvidencePlan,
     selectedSpec: CommitEvidenceSpec,
+    budget: WriterCallBudget,
   ): Promise<CommitGenerationResult> {
     const attempted: CommitEvidenceSpec[] = [selectedSpec];
-    let candidate = materializeCandidate(evidenceRequest, selectedSpec);
-    let responseResult = await this.completeCandidate(request, candidate);
+    let spec = selectedSpec;
+    let candidate = materializeCandidate(evidenceRequest, spec);
+    let outcome = await this.runOutputLadder(request, candidate, budget);
 
-    const retry = findCheaperCandidate(plan.candidates, selectedSpec);
-    if (
-      (!responseResult.ok && responseResult.failure.code === "provider-overflow")
-      || (responseResult.ok && shouldUseCheaperRetry(responseResult.response, plan.contextWindow, candidate.outputReserve))
-    ) {
+    // Less input only ever remedies input pressure: a provider refusal, or a
+    // reply that died because the prompt crowded the window. A writer that just
+    // needed more output tokens is served by the ladder, not by a cheaper
+    // representation, but shrinking the prompt stays a useful last resort.
+    const inputPressure = outcome.kind === "overflow"
+      || outcome.kind === "truncated"
+      || (outcome.kind === "failed" && outcome.failure.code === "provider-overflow");
+    if (inputPressure && budget.calls < budget.max) {
+      const retry = findCheaperCandidate(plan.candidates, spec);
       if (retry) {
         attempted.push(retry);
+        spec = retry;
         candidate = materializeCandidate(evidenceRequest, retry);
-        responseResult = await this.completeCandidate(request, candidate);
+        outcome = await this.runOutputLadder(request, candidate, budget);
       }
     }
 
-    if (!responseResult.ok) return responseResult.failure;
-    const response = responseResult.response;
     const attempts = attempted.length as 1 | 2;
-    if (shouldUseCheaperRetry(response, plan.contextWindow, candidate.outputReserve)) {
-      return this.responseFailure(response, candidate, request, attempts);
+    if (outcome.kind === "failed") return outcome.failure;
+    if (outcome.kind === "overflow") {
+      return this.responseFailure(outcome.response, candidate, request, attempts);
+    }
+    if (outcome.kind === "truncated") {
+      return this.truncationFailure(outcome.response, candidate, request, attempts);
     }
 
-    const validation = validateGeneratedResponse(response);
+    const response = outcome.response;
+    const validation: CommitMessageValidation = outcome.salvage
+      ? { ok: true, message: outcome.salvage.message, subject: outcome.salvage.subject }
+      : validateGeneratedResponse(response);
     if (!validation.ok) {
       return this.validationFailure(validation, response, candidate, request, attempts);
     }
 
-    const representation = routeForCandidate(candidate);
-    return {
-      ok: true,
-      message: validation.message,
-      subject: validation.subject,
-      representation,
-      analysisUsed: false,
-      intentIncluded: candidate.intentIncluded,
+    return this.okResult(request, candidate, validation, {
       attempts,
-      diagnostics: {
-        route: representation,
-        intentIncluded: candidate.intentIncluded,
-        attempts,
-        cacheConfidence: effectiveCacheConfidence(request, response),
-        candidate: candidateDiagnostics(candidate),
-        usage: usageDiagnostics(response.usage),
-      },
-    };
+      analysisUsed: false,
+      truncated: outcome.salvage !== undefined,
+      response,
+    });
   }
 
   private async generateWithAnalyst(
@@ -209,15 +280,20 @@ export class CommitMessageGenerator {
     evidenceRequest: CommitEvidenceRequest,
     plan: CommitEvidencePlan,
     analystSpec: CommitEvidenceSpec,
+    budget: WriterCallBudget,
   ): Promise<CommitGenerationResult> {
     const analystCandidate = materializeCandidate(evidenceRequest, analystSpec);
-    const analystResult = await this.completeCandidate(request, analystCandidate);
-    if (!analystResult.ok) return analystResult.failure;
-    if (shouldUseCheaperRetry(analystResult.response, plan.contextWindow, analystCandidate.outputReserve)) {
-      return this.responseFailure(analystResult.response, analystCandidate, request, 1);
+    const analystOutcome = await this.runOutputLadder(request, analystCandidate, budget, ANALYST_WRITER_RESERVE_CALLS);
+    if (analystOutcome.kind === "failed") return analystOutcome.failure;
+    if (analystOutcome.kind === "overflow") {
+      return this.responseFailure(analystOutcome.response, analystCandidate, request, 1);
+    }
+    if (analystOutcome.kind === "truncated") {
+      return this.truncationFailure(analystOutcome.response, analystCandidate, request, 1);
     }
 
-    const analysisResult = parseDiffAnalysisResponse(analystResult.response, request.evidence);
+    const analystResponse = analystOutcome.response;
+    const analysisResult = parseDiffAnalysisResponse(analystResponse, request.evidence);
     if (!analysisResult.ok) {
       return {
         ok: false,
@@ -227,9 +303,9 @@ export class CommitMessageGenerator {
           route: "analyst-assisted",
           intentIncluded: false,
           attempts: 1,
-          cacheConfidence: effectiveCacheConfidence(request, analystResult.response),
+          cacheConfidence: effectiveCacheConfidence(request, analystResponse),
           candidate: analystCandidate,
-          analystUsage: usageDiagnostics(analystResult.response.usage),
+          analystUsage: usageDiagnostics(analystResponse.usage),
         },
       };
     }
@@ -251,46 +327,140 @@ export class CommitMessageGenerator {
           attempts: 1,
           cacheConfidence: request.cacheConfidence ?? "unknown",
           candidate: finalCandidates.withoutIntent,
-          analystUsage: usageDiagnostics(analystResult.response.usage),
+          analystUsage: usageDiagnostics(analystResponse.usage),
         },
       };
     }
 
     const finalCandidate = materializeCandidate(evidenceRequest, finalSpec);
-    const finalResult = await this.completeCandidate(request, finalCandidate);
-    if (!finalResult.ok) return finalResult.failure;
-    if (shouldUseCheaperRetry(finalResult.response, plan.contextWindow, finalCandidate.outputReserve)) {
-      return this.responseFailure(finalResult.response, finalCandidate, request, 2);
+    const finalOutcome = await this.runOutputLadder(request, finalCandidate, budget);
+    if (finalOutcome.kind === "failed") return finalOutcome.failure;
+    if (finalOutcome.kind === "overflow") {
+      return this.responseFailure(finalOutcome.response, finalCandidate, request, 2, analystResponse);
+    }
+    if (finalOutcome.kind === "truncated") {
+      return this.truncationFailure(finalOutcome.response, finalCandidate, request, 2, analystResponse);
     }
 
-    const validation = validateGeneratedResponse(finalResult.response);
-    if (!validation.ok) {
-      return this.validationFailure(validation, finalResult.response, finalCandidate, request, 2, analystResult.response);
+    const finalResponse = finalOutcome.response;
+    const finalValidation: CommitMessageValidation = finalOutcome.salvage
+      ? { ok: true, message: finalOutcome.salvage.message, subject: finalOutcome.salvage.subject }
+      : validateGeneratedResponse(finalResponse);
+    if (!finalValidation.ok) {
+      return this.validationFailure(finalValidation, finalResponse, finalCandidate, request, 2, analystResponse);
     }
 
+    return this.okResult(request, finalCandidate, finalValidation, {
+      attempts: 2,
+      analysisUsed: true,
+      truncated: finalOutcome.salvage !== undefined,
+      response: finalResponse,
+      analystResponse,
+    });
+  }
+
+  /** Assemble the successful result, including its route diagnostics. */
+  private okResult(
+    request: CommitGenerationRequest,
+    candidate: CommitEvidenceSpec,
+    validation: Extract<CommitMessageValidation, { ok: true }>,
+    meta: {
+      readonly attempts: 1 | 2;
+      readonly analysisUsed: boolean;
+      readonly truncated: boolean;
+      readonly response: AssistantMessage;
+      readonly analystResponse?: AssistantMessage | undefined;
+    },
+  ): Extract<CommitGenerationResult, { ok: true }> {
+    const representation = routeForCandidate(candidate);
     return {
       ok: true,
       message: validation.message,
       subject: validation.subject,
-      representation: "analyst-assisted",
-      analysisUsed: true,
-      intentIncluded: finalCandidate.intentIncluded,
-      attempts: 2,
+      representation,
+      analysisUsed: meta.analysisUsed,
+      intentIncluded: candidate.intentIncluded,
+      attempts: meta.attempts,
       diagnostics: {
-        route: "analyst-assisted",
-        intentIncluded: finalCandidate.intentIncluded,
-        attempts: 2,
-        cacheConfidence: effectiveCacheConfidence(request, finalResult.response),
-        candidate: candidateDiagnostics(finalCandidate),
-        usage: usageDiagnostics(finalResult.response.usage),
-        analystUsage: usageDiagnostics(analystResult.response.usage),
+        route: representation,
+        intentIncluded: candidate.intentIncluded,
+        attempts: meta.attempts,
+        cacheConfidence: effectiveCacheConfidence(request, meta.response),
+        ...(meta.truncated ? { truncated: true } : {}),
+        candidate: candidateDiagnostics(candidate),
+        usage: usageDiagnostics(meta.response.usage),
+        ...(meta.analystResponse === undefined ? {} : { analystUsage: usageDiagnostics(meta.analystResponse.usage) }),
       },
     };
+  }
+
+  /**
+   * Run one prompt through as many output budgets as the call budget allows.
+   * A `length` stop means the provider cut the reply at `max_tokens`, which is
+   * pi-git's own choice, so escalate instead of failing: keep whatever the
+   * model already finished, then retry with a bigger budget, then without
+   * reasoning when reasoning tokens ate the whole completion budget.
+   *
+   * `reserveForNext` keeps room for a later phase, so an analyst that keeps
+   * truncating cannot starve the writer that still has to run.
+   */
+  private async runOutputLadder(
+    request: CommitGenerationRequest,
+    candidate: CommitEvidenceCandidate,
+    budget: WriterCallBudget,
+    reserveForNext = 0,
+  ): Promise<WriterOutcome> {
+    // Only the writer route is worth salvaging; analyst JSON cannot be repaired
+    // line by line, so it just walks the budget rungs.
+    const salvage = candidate.representation !== "analyst";
+    // Leave room for a later phase, but never starve this one entirely.
+    const remaining = budget.max - budget.calls - reserveForNext;
+    const rungs = outputLadderRungs(request, candidate).slice(0, Math.max(1, remaining));
+    let lastTruncated: AssistantMessage | undefined;
+    for (const rung of rungs) {
+      if (budget.calls >= budget.max) break;
+      budget.calls += 1;
+      const result = await this.completeCandidate(request, candidate, rung);
+      if (!result.ok) {
+        if (result.failure.code === "aborted" || !lastTruncated) return { kind: "failed", failure: result.failure };
+        // A later rung that errors must not discard what an earlier one produced.
+        break;
+      }
+      const response = result.response;
+
+      if (isContextOverflow(response, modelContextWindow(request.model) ?? 0)) {
+        return { kind: "overflow", response };
+      }
+      if (response.stopReason !== "length") {
+        return { kind: "success", response };
+      }
+
+      if (salvage) {
+        const text = assistantText(response);
+        if (text) {
+          // A finished subject plus finished body lines is a usable commit.
+          const recovered = salvageTruncatedCommitMessage(text, { requireBody: true });
+          if (recovered) return { kind: "success", response, salvage: recovered };
+        }
+      }
+      lastTruncated = response;
+    }
+
+    if (lastTruncated) {
+      if (salvage) {
+        const text = assistantText(lastTruncated);
+        const recovered = text ? salvageTruncatedCommitMessage(text, { requireBody: false }) : undefined;
+        if (recovered) return { kind: "success", response: lastTruncated, salvage: recovered };
+      }
+      return { kind: "truncated", response: lastTruncated };
+    }
+    return { kind: "failed", failure: { ok: false, code: "invalid-response", reason: "The commit generation call budget was exhausted before this prompt could run." } };
   }
 
   private async completeCandidate(
     request: CommitGenerationRequest,
     candidate: CommitEvidenceCandidate,
+    rung: WriterRung = { reserve: candidate.outputReserve, reasoning: request.reasoning },
   ): Promise<
     | { readonly ok: true; readonly response: AssistantMessage }
     | { readonly ok: false; readonly failure: Extract<CommitGenerationResult, { ok: false }> }
@@ -303,9 +473,9 @@ export class CommitMessageGenerator {
         request.model,
         { systemPrompt: candidate.systemPrompt, messages: [...(candidate.contextMessages ?? [candidate.userMessage])], tools: [] },
         {
-          maxTokens: candidate.outputReserve,
+          maxTokens: rung.reserve,
           ...(request.signal === undefined ? {} : { signal: request.signal }),
-          ...reasoningOptions(request.reasoning),
+          ...reasoningOptions(rung.reasoning),
         },
       );
       return { ok: true, response };
@@ -355,6 +525,33 @@ export class CommitMessageGenerator {
     };
   }
 
+  /** The output budget ran out even after escalation: say so precisely. */
+  private truncationFailure(
+    response: AssistantMessage,
+    candidate: CommitEvidenceSpec,
+    request: CommitGenerationRequest,
+    attempts: 1 | 2,
+    analystResponse?: AssistantMessage,
+  ): Extract<CommitGenerationResult, { ok: false }> {
+    const detail = response.errorMessage
+      ? ` Provider error: ${response.errorMessage.length > 400 ? `${response.errorMessage.slice(0, 400)}…` : response.errorMessage}`
+      : "";
+    return {
+      ok: false,
+      code: "response-truncated",
+      reason: `The model used its entire ${candidate.outputReserve}-token output budget without finishing a commit message. Retry, stage a smaller change, or select a model with a larger output budget.${detail}`,
+      diagnostics: {
+        route: routeForCandidate(candidate),
+        intentIncluded: candidate.intentIncluded,
+        attempts,
+        cacheConfidence: effectiveCacheConfidence(request, response),
+        candidate,
+        usage: usageDiagnostics(response.usage),
+        ...(analystResponse === undefined ? {} : { analystUsage: usageDiagnostics(analystResponse.usage) }),
+      },
+    };
+  }
+
   private validationFailure(
     validation: Exclude<CommitMessageValidation, { ok: true }>,
     response: AssistantMessage,
@@ -387,6 +584,10 @@ export async function generateCommitMessage(
   return new CommitMessageGenerator(client).generate(request);
 }
 
+function sizePressureFailure(code: Extract<CommitGenerationResult, { ok: false }>["code"]): boolean {
+  return code === "provider-overflow" || code === "input-too-large" || code === "context-too-small" || code === "response-truncated";
+}
+
 function findCheaperCandidate(
   candidates: readonly CommitEvidenceSpec[],
   selected: CommitEvidenceSpec,
@@ -399,10 +600,6 @@ function findCheaperCandidate(
     && candidate.estimatedInputTokens < selected.estimatedInputTokens
     && (!candidate.intentIncluded || !selected.intentIncluded),
   );
-}
-
-function shouldUseCheaperRetry(response: AssistantMessage, contextWindow: number, desiredMaxOutput: number): boolean {
-  return isContextOverflow(response, contextWindow) || isRecoverableLength(response, desiredMaxOutput);
 }
 
 function effectiveCacheConfidence(request: CommitGenerationRequest, response: AssistantMessage): CacheConfidence {
@@ -584,7 +781,10 @@ function containsAuthorizationLanguage(value: string): boolean {
 }
 
 function isOverflowError(value: string): boolean {
-  return /context|prompt.{0,20}(?:too long|too large)|token.{0,20}(?:limit|length)|exceed/i.test(value);
+  // Reuse the provider phrasings pi-ai already knows instead of guessing again.
+  if (/rate limit|too many requests|throttl|service unavailable/i.test(value)) return false;
+  return getOverflowPatterns().some((pattern) => pattern.test(value))
+    || /context.{0,20}(?:too long|too large|exceeded)|exceeds? the.{0,20}context/i.test(value);
 }
 
 

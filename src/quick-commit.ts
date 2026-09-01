@@ -256,7 +256,7 @@ export class QuickCommitJob {
       if (commitError) throw commitError;
 
       this.finish("succeeded");
-      this.notify(`${CHECK_ICON} Quick commit: complete\n  ${this.subject}`, "info");
+      this.notify(`${CHECK_ICON} Quick commit: complete\n  ${this.subject}${this.recoveredHint()}`, "info");
     } catch (error: unknown) {
       this.fail(error);
     } finally {
@@ -320,6 +320,13 @@ export class QuickCommitJob {
 
     this.finish("succeeded");
     this.notify(`${CHECK_ICON} Quick commit: complete\n  ${subject}`, "info");
+  }
+
+  /** Mention a message that was recovered from a reply the provider cut off. */
+  private recoveredHint(): string {
+    return this.diagnosticsValue?.truncated
+      ? "\n  The reply was cut off, so the body keeps only the lines the model finished."
+      : "";
   }
 
   private transition(next: QuickCommitState): void {

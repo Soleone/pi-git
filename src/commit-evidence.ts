@@ -141,6 +141,24 @@ export function reduceStagedEvidence(evidence: StagedEvidence, budgetBytes: numb
   };
 }
 
+/** Force a labeled skeleton reduction of the current compact patch for size pressure. */
+export function degradeStagedEvidence(evidence: StagedEvidence): StagedEvidence | undefined {
+  if (evidence.compactBytes <= MIN_REDUCTION_BYTES) return undefined;
+  const raw = evidence.partial?.rawCompactPatch ?? evidence.compactPatch;
+  const skeleton = buildDiffSkeleton(raw, Math.floor(evidence.compactBytes / 2));
+  if (skeleton.bytes >= evidence.compactBytes) return undefined;
+  return {
+    ...evidence,
+    compactPatch: skeleton.patch,
+    compactBytes: skeleton.bytes,
+    partial: {
+      originalCompactBytes: evidence.partial?.originalCompactBytes ?? evidence.compactBytes,
+      omittedFiles: skeleton.omittedFiles,
+      rawCompactPatch: raw,
+    },
+  };
+}
+
 /** Normalize an explicit intent value; invalid or oversized intent is omitted. */
 export function normalizeCommitIntent(
   text: string,

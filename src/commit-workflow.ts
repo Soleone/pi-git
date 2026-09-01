@@ -513,7 +513,7 @@ function notifySmartDraftReady(
   draft: { readonly message: string; readonly diagnostics: CommitGenerationDiagnostics },
 ): void {
   ctx.ui.notify(
-    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)})\n  ${firstLine(draft.message)}\nReview before committing`,
+    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)}${draft.diagnostics.truncated ? ", recovered from a truncated reply" : ""})\n  ${firstLine(draft.message)}\nReview before committing`,
     "info",
   );
 }

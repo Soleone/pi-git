@@ -127,7 +127,14 @@ export function validateCommitResponse(
     return { ok: false, code: "no-text", reason: "The model returned no text." };
   }
 
-  const raw = textParts.join("\n");
+  return validateCommitMessageText(textParts.join("\n"), limits);
+}
+
+/** Validate commit message text without inspecting the model stop reason. */
+export function validateCommitMessageText(
+  raw: string,
+  limits: CommitMessageLimits = {},
+): CommitMessageValidation {
   const message = raw.trim();
   if (!message) return { ok: false, code: "empty", reason: "The model returned an empty commit message." };
   if (message.includes("\0")) return { ok: false, code: "nul", reason: "The commit message contains a NUL byte." };
@@ -173,4 +180,86 @@ export function validateCommitResponse(
   }
 
   return { ok: true, message, subject };
+}
+
+export interface TruncatedCommitMessage {
+  readonly message: string;
+  readonly subject: string;
+  /** True when the body was discarded because only the subject survived. */
+  readonly subjectOnly: boolean;
+}
+
+/** A line that cannot end a real commit message: it opens the next thought. */
+function isDanglingLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || /^[-*]$/.test(trimmed)) return true;
+  if (/[,;:([{&|]$/.test(trimmed)) return true;
+  return /\b(?:and|or|with|to|of|for|in|that|which|because|the)\s*$/i.test(trimmed);
+}
+
+/**
+ * Recover a usable message from a response the provider cut off at the output
+ * budget. The trailing line is assumed incomplete and dropped, so what remains
+ * is text the model actually finished. Returns undefined when nothing safely
+ * salvageable is present.
+ */
+export function salvageTruncatedCommitMessage(
+  text: string,
+  options: { readonly requireBody?: boolean } = {},
+): TruncatedCommitMessage | undefined {
+  let lines = text.replace(/\r\n?/g, "\n").split("\n").map((line) => line.trimEnd());
+  lines = dropBlankLines(lines);
+  if (lines.length === 0) return undefined;
+
+  // Models that chatter before the payload put the explanation first.
+  while (lines.length > 0 && (isFenceLine(lines[0] ?? "") || EXPLANATORY_PREFIX.test((lines[0] ?? "").trim()))) {
+    lines = dropBlankLines(lines.slice(1));
+  }
+  if (lines.length === 0) return undefined;
+
+  const subject = shortenCommitMessageSubject(lines[0] ?? "").trim();
+  if (!subject || isDanglingLine(subject)) return undefined;
+
+  // The last emitted line is the one the provider cut mid-token, so drop it and
+  // keep only lines the model finished.
+  const body = lines.slice(1, -1);
+  while (body.length > 0) {
+    const last = body[body.length - 1] ?? "";
+    if (!last.trim() || isFenceLine(last) || isDanglingLine(last)) body.pop();
+    else break;
+  }
+  while (body.length > 0 && !(body[0] ?? "").trim()) body.shift();
+
+  if (body.length === 0 && options.requireBody) return undefined;
+  const assembled = assembleWithinByteLimit(subject, body);
+  const validation = validateCommitMessageText(assembled);
+  if (!validation.ok) return undefined;
+
+  return {
+    message: validation.message,
+    subject: validation.subject,
+    subjectOnly: body.length === 0,
+  };
+}
+
+function isFenceLine(line: string): boolean {
+  return /^\s*```/.test(line);
+}
+
+function dropBlankLines(lines: readonly string[]): string[] {
+  const result = [...lines];
+  while (result.length > 0 && !result[result.length - 1]?.trim()) result.pop();
+  while (result.length > 0 && !result[0]?.trim()) result.shift();
+  return result;
+}
+
+function assembleWithinByteLimit(subject: string, body: readonly string[]): string {
+  const kept: string[] = [];
+  let used = Buffer.byteLength(subject, "utf8") + 2;
+  for (const line of body) {
+    used += Buffer.byteLength(line, "utf8") + 1;
+    if (used > MAX_COMMIT_MESSAGE_BYTES) break;
+    kept.push(line);
+  }
+  return kept.length === 0 ? subject : `${subject}\n\n${kept.join("\n")}`;
 }
