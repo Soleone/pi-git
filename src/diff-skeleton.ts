@@ -39,8 +39,8 @@ interface FileBlock {
 }
 
 /** Low-signal paths (lockfiles, vendor trees, generated output) are summarized first. */
-function pathPenalty(path: string): number {
-  return isLockPath(path) || isVendorPath(path) || isGeneratedPath(path) ? 8 : 1;
+function isLowSignalPath(path: string): boolean {
+  return isLockPath(path) || isVendorPath(path) || isGeneratedPath(path);
 }
 
 function parseBSidePath(headerLines: readonly string[]): string {
@@ -129,7 +129,6 @@ export function buildDiffSkeleton(patch: string, budgetBytes: number): DiffSkele
 
   const blocks = splitIntoBlocks(patch);
   const bodySize = (block: FileBlock): number => linesSize(block.bodies);
-  const isLowSignal = (block: FileBlock): boolean => pathPenalty(block.path) > 1;
   const markerFor = (block: FileBlock): string =>
     `@@ pi-git: change bodies omitted (+${block.addedLines} -${block.deletedLines} across ${block.hunks.length} hunks) @@`;
   const fullSizeOf = (block: FileBlock): number =>
@@ -156,8 +155,8 @@ export function buildDiffSkeleton(patch: string, budgetBytes: number): DiffSkele
     }
   };
 
-  const lowSignal = blocks.filter(isLowSignal).sort((left, right) => bodySize(right) - bodySize(left));
-  const highSignal = blocks.filter((block) => !isLowSignal(block)).sort((left, right) => bodySize(left) - bodySize(right));
+  const lowSignal = blocks.filter((block) => isLowSignalPath(block.path)).sort((left, right) => bodySize(right) - bodySize(left));
+  const highSignal = blocks.filter((block) => !isLowSignalPath(block.path)).sort((left, right) => bodySize(left) - bodySize(right));
 
   // Phase 1: skeletonize lock/vendor/generated bodies first so they never crowd
   // out semantic files, regardless of relative sizes.

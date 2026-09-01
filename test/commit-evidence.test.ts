@@ -11,7 +11,7 @@ import {
   parseStagedNumstat,
   summarizeStagedFiles,
 } from "../src/evidence-parse.js";
-import { planCommitEvidence } from "../src/evidence-plan.js";
+import { materializeCandidate, planCommitEvidence } from "../src/evidence-plan.js";
 import { CommitMessageGenerator, parseDiffAnalysisResponse } from "../src/commit-generator.js";
 
 function model(contextWindow = 32_000): Model<Api> {
@@ -98,6 +98,16 @@ describe("staged evidence contracts", () => {
     expect(result.route).toBe("cached-session");
     expect(result.selected?.representation).toBe("cached-session");
     expect(result.selected?.fits).toBe(true);
+  });
+
+  it("includes authoritative staged data in analyst prompts", () => {
+    const request = { model: model(), evidence: evidence(), style: "style" };
+    const analyst = planCommitEvidence(request).candidates.find((candidate) => candidate.representation === "analyst");
+    if (!analyst) throw new Error("Expected an analyst candidate");
+
+    const content = materializeCandidate(request, analyst).userMessage.content;
+    expect(content).toContain("<staged-stat authoritative=\"true\">\n1 file changed\n</staged-stat>");
+    expect(content).toContain("<staged-manifest authoritative=\"true\">\nfileCount=1");
   });
 
   it("rejects invalid or missing context metadata before model work", () => {

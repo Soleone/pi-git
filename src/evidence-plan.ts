@@ -410,13 +410,8 @@ function buildCandidateContent(
     sections.push(`<session-intent advisory=\"true\" source=\"${request.intent.source}\">\n${request.intent.text}\n</session-intent>`);
   }
 
-  if (representation !== "analyst") {
-    sections.push(`<staged-stat authoritative=\"true\">\n${request.evidence.stat || "(no stat)"}\n</staged-stat>`);
-    sections.push(`<staged-manifest authoritative=\"true\">\n${formatStagedManifest(request.evidence.files, request.evidence.summary)}\n</staged-manifest>`);
-  } else {
-    sections.push(`<staged-stat authoritative=\"true\">\n${request.evidence.stat || "(no stat)"}\n</staged-stat>`);
-    sections.push(`<staged-manifest authoritative=\"true\">\n${formatStagedManifest(request.evidence.files, request.evidence.summary)}\n</staged-manifest>`);
-  }
+  sections.push(`<staged-stat authoritative=\"true\">\n${request.evidence.stat || "(no stat)"}\n</staged-stat>`);
+  sections.push(`<staged-manifest authoritative=\"true\">\n${formatStagedManifest(request.evidence.files, request.evidence.summary)}\n</staged-manifest>`);
 
   if (representation === "context" || representation === "compact") {
     const patch = representation === "context" ? request.evidence.contextPatch : request.evidence.compactPatch;
