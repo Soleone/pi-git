@@ -127,7 +127,7 @@ export interface CommitGenerationDiagnostics {
   /** True when the message was recovered from a response the provider cut off. */
   readonly truncated?: boolean | undefined;
   readonly candidate: Pick<CommitEvidenceSpec, "representation" | "estimatedInputTokens" | "inputBudget" | "outputReserve" | "safetyReserve" | "diffBytes" | "intentIncluded">;
-  /** Total across every model call this generation made, retries included. */
+  /** Total across every model call this generation made, analyst and retries included. */
   readonly usage?: TokenTally | undefined;
   /** Subset of `usage` spent on the analyst phase. */
   readonly analystUsage?: TokenTally | undefined;
@@ -413,7 +413,7 @@ export class CommitMessageGenerator {
     options: { readonly reserveForNext?: number; readonly analystPhase?: boolean } = {},
   ): Promise<WriterOutcome> {
     const reserveForNext = options.reserveForNext ?? 0;
-    const phaseTally = options.analystPhase ? budget.analystTally : budget.tally;
+    const phaseTally = options.analystPhase ? budget.analystTally : undefined;
     // Only the writer route is worth salvaging; analyst JSON cannot be repaired
     // line by line, so it just walks the budget rungs.
     const salvage = candidate.representation !== "analyst";
@@ -431,7 +431,10 @@ export class CommitMessageGenerator {
         break;
       }
       const response = result.response;
-      phaseTally.add(response.usage);
+      // Every call lands on the whole-generation bill; the analyst phase is
+      // also reported as its own subset.
+      budget.tally.add(response.usage);
+      phaseTally?.add(response.usage);
 
       if (isContextOverflow(response, modelContextWindow(request.model) ?? 0)) {
         return { kind: "overflow", response };
