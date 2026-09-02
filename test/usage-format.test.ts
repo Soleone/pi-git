@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Usage } from "@earendil-works/pi-ai";
-import { TokenTallyCollector, compactTokenCount, formatTokenTally } from "../src/usage-format.js";
+import { TokenTallyCollector, compactTokenCount, formatTokenTally, formatUsageCostLine } from "../src/usage-format.js";
 
 function usage(overrides: Partial<Usage> = {}): Usage {
   return {
@@ -36,5 +36,21 @@ describe("token tally", () => {
     expect(compactTokenCount(999)).toBe("999");
     expect(compactTokenCount(1_000)).toBe("1k");
     expect(compactTokenCount(1_499_999)).toBe("1M");
+  });
+
+  it("folds an earlier phase into the same bill", () => {
+    const draft = new TokenTallyCollector();
+    draft.add(usage({ input: 1_000, output: 20 }));
+
+    const total = new TokenTallyCollector();
+    total.merge(draft.totals);
+    total.add(usage({ input: 500, output: 10 }));
+
+    expect(formatUsageCostLine(total.totals)).toBe("\n  $0.00 ⚡0 ↑1.5k ↓30 · 2 calls");
+  });
+
+  it("omits the cost line when no model was called", () => {
+    expect(formatUsageCostLine(undefined)).toBe("");
+    expect(formatUsageCostLine(new TokenTallyCollector().totals)).toBe("");
   });
 });

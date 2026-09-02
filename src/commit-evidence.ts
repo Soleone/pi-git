@@ -1,8 +1,8 @@
 /**
- * Shared contracts for commit generation: staged evidence, session intent,
- * cache keys, and the capture of raw Git evidence.
+ * Shared contracts for commit generation: staged evidence, explicit intent,
+ * draft cache keys, and the capture of raw Git evidence.
  */
-import type { Api, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { GitService } from "./git-service.js";
 import { MAX_COMMIT_DIFF_BYTES } from "./commit-message.js";
 import { buildDiffSkeleton, type SkeletonOmittedFile } from "./diff-skeleton.js";
@@ -17,10 +17,7 @@ import {
 export const GENERATOR_CONTRACT_VERSION = "pi-git-commit-v1";
 export const MAX_COMMIT_INTENT_BYTES = 1_500;
 export const MAX_COMMIT_INTENT_TOKENS = 256;
-export const MAX_COMMIT_INTENT_MESSAGES = 2;
 export const MAX_ANALYSIS_BYTES = 32 * 1024;
-
-export type CacheConfidence = "hot" | "cold" | "unknown";
 
 export interface StagedEvidence {
   readonly snapshot: GitMaybeSnapshot;
@@ -47,16 +44,7 @@ export interface PartialEvidence {
 
 export interface CommitIntent {
   readonly text: string;
-  readonly source: "explicit" | "recent-user";
   readonly estimatedTokens: number;
-}
-
-export interface CommitSessionContext {
-  readonly messages: readonly Message[];
-  /** Reported current context tokens, or null when the harness cannot know them. */
-  readonly currentUsageTokens?: number | null | undefined;
-  readonly sessionId?: string | undefined;
-  readonly leafId?: string | null | undefined;
 }
 
 export type CommitOperation =
@@ -160,64 +148,21 @@ export function degradeStagedEvidence(evidence: StagedEvidence): StagedEvidence 
 }
 
 /** Normalize an explicit intent value; invalid or oversized intent is omitted. */
-export function normalizeCommitIntent(
-  text: string,
-  source: CommitIntent["source"] = "explicit",
-): CommitIntent | undefined {
+export function normalizeCommitIntent(text: string): CommitIntent | undefined {
   const normalized = text.trim();
-  if (!normalized || normalized.includes("\0")) return undefined;
+  // A slash command is an instruction to pi, not a statement of commit intent.
+  if (!normalized || normalized.includes("\0") || normalized.startsWith("/")) return undefined;
   if (Buffer.byteLength(normalized, "utf8") > MAX_COMMIT_INTENT_BYTES) return undefined;
   const estimatedTokens = estimateTextTokensLocal(normalized);
   if (estimatedTokens > MAX_COMMIT_INTENT_TOKENS) return undefined;
-  return { text: normalized, source, estimatedTokens };
+  return { text: normalized, estimatedTokens };
 }
 
-/** Extract at most two recent, text-only user turns from a public session-entry list. */
-export function extractRecentUserIntent(entries: readonly unknown[]): CommitIntent | undefined {
-  const messages: string[] = [];
-  for (const entry of entries) {
-    const value = entry as { type?: unknown; message?: { role?: unknown; content?: unknown } };
-    if (value.type !== "message" || value.message?.role !== "user") continue;
-    const text = textOnlyUserContent(value.message.content);
-    if (!text || text.startsWith("/")) continue;
-    messages.push(text);
-  }
-
-  const selected = messages.slice(-MAX_COMMIT_INTENT_MESSAGES);
-  if (selected.length === 0) return undefined;
-  const combined = selected.join("\n\n");
-  return normalizeCommitIntent(combined, "recent-user");
-}
-
-function textOnlyUserContent(content: unknown): string | undefined {
-  if (typeof content === "string") return content.trim() || undefined;
-  if (!Array.isArray(content) || content.length === 0) return undefined;
-  const texts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") return undefined;
-    const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string") return undefined;
-    texts.push(text);
-  }
-  const result = texts.join("\n").trim();
-  return result || undefined;
-}
-
-export function cacheConfidenceFromUsage(usage: { cacheRead?: number; cacheWrite?: number } | undefined): CacheConfidence {
-  if (!usage) return "unknown";
-  const hasRead = typeof usage.cacheRead === "number" && Number.isFinite(usage.cacheRead);
-  const hasWrite = typeof usage.cacheWrite === "number" && Number.isFinite(usage.cacheWrite);
-  if (!hasRead && !hasWrite) return "unknown";
-  if ((usage.cacheRead ?? 0) > 0 || (usage.cacheWrite ?? 0) > 0) return "hot";
-  return "cold";
-}
-
+/** Identifies a draft that may be reused for the same staged snapshot. */
 export function snapshotCacheKey(
   snapshot: GitMaybeSnapshot,
   model: Model<Api>,
   style: string,
-  intent: CommitIntent | undefined,
-  session?: CommitSessionContext,
 ): string {
   return JSON.stringify({
     contract: GENERATOR_CONTRACT_VERSION,
@@ -229,8 +174,6 @@ export function snapshotCacheKey(
     },
     model: { provider: model.provider, id: model.id },
     style,
-    intent: intent ? { source: intent.source, text: intent.text } : undefined,
-    session: session ? { sessionId: session.sessionId, leafId: session.leafId } : undefined,
   });
 }
 

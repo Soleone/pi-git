@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildStagedFiles, parseStagedNameStatus, parseStagedNumstat } from "../src/evidence-parse.js";
-import { classifyFormattingOnly, patchBodiesByPath } from "../src/mechanical-diff.js";
+import { classifyFormattingOnly, formattingOnlyMessage, patchBodiesByPath } from "../src/mechanical-diff.js";
 
 function filesFrom(nameStatus: string, numstat: string) {
   return buildStagedFiles(nameStatus, numstat);
@@ -70,5 +70,24 @@ describe("classifyFormattingOnly", () => {
       "10\t10\tsrc/other.ts\x001\t1\tsrc/app.ts\x00",
     );
     expect(classifyFormattingOnly(withSource, appPatch).formattingOnly).toBe(false);
+  });
+});
+
+describe("formattingOnlyMessage", () => {
+  it("gives both commit paths the same deterministic draft", () => {
+    const patch = formatPatch("src/app.ts", [["const x = 1;", "const x  = 1;"]]);
+    const oneFile = filesFrom("M\x00src/app.ts\x00", "1\t1\tsrc/app.ts\x00");
+    const draft = formattingOnlyMessage(oneFile, patch);
+    expect(draft?.subject).toBe("style: format src/app.ts");
+    expect(draft?.message).toContain("generated without a model call");
+
+    const second = filesFrom("M\x00src/other.ts\x00", "1\t1\tsrc/other.ts\x00");
+    expect(formattingOnlyMessage([...oneFile, ...second], patch + formatPatch("src/other.ts", [["const y = 1;", "const y  = 1;"]]))?.subject).toBe("style: format 2 files");
+  });
+
+  it("stays out of the way for real changes and empty selections", () => {
+    const realChange = filesFrom("M\x00src/app.ts\x00", "1\t1\tsrc/app.ts\x00");
+    expect(formattingOnlyMessage(realChange, formatPatch("src/app.ts", [["return 1;", "return 2;"]]))).toBeUndefined();
+    expect(formattingOnlyMessage([], "")).toBeUndefined();
   });
 });

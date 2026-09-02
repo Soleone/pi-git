@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import {
-  extractRecentUserIntent,
+  normalizeCommitIntent,
   type StagedEvidence,
 } from "../src/commit-evidence.js";
 import {
@@ -58,14 +58,10 @@ describe("staged evidence contracts", () => {
     ]);
   });
 
-  it("drops slash commands and image-bearing turns from bounded intent", () => {
-    const intent = extractRecentUserIntent([
-      { type: "message", message: { role: "assistant", content: "ignore" } },
-      { type: "message", message: { role: "user", content: "/git-smart-commit" } },
-      { type: "message", message: { role: "user", content: "Implement the staged change" } },
-      { type: "message", message: { role: "user", content: [{ type: "image", data: "x", mimeType: "image/png" }] } },
-    ]);
-    expect(intent?.text).toBe("Implement the staged change");
+  it("drops oversized or slash-command intent", () => {
+    expect(normalizeCommitIntent("  Explain the staged change  ")?.text).toBe("Explain the staged change");
+    expect(normalizeCommitIntent("/git-smart-commit")).toBeUndefined();
+    expect(normalizeCommitIntent("x".repeat(2_000))).toBeUndefined();
   });
 
   it("selects a direct complete candidate and accounts for reserves", () => {
@@ -77,27 +73,17 @@ describe("staged evidence contracts", () => {
     expect(formatStagedManifest(evidence().files, evidence().summary)).toContain("fileCount=1");
   });
 
-  it("selects a warm cached session for a larger complete diff", () => {
+  it("plans staged evidence only, never a conversation prefix", () => {
     const largePatch = `diff --git a/file.txt b/file.txt\n${"+changed line\n".repeat(4_000)}`;
-    const largeEvidence = evidence(largePatch);
-    const result = planCommitEvidence({
-      model: model(),
-      evidence: largeEvidence,
-      style: "style",
-      cacheConfidence: "hot",
-      session: {
-        messages: [
-          { role: "user", content: "Implement the feature", timestamp: 0 },
-          { role: "assistant", content: [{ type: "text", text: "Done" }], api: "openai-completions", provider: "test", model: "test", usage: {} as never, stopReason: "stop", timestamp: 0 },
-        ],
-        currentUsageTokens: null,
-        sessionId: "session",
-        leafId: "leaf",
-      },
-    });
-    expect(result.route).toBe("cached-session");
-    expect(result.selected?.representation).toBe("cached-session");
-    expect(result.selected?.fits).toBe(true);
+    const result = planCommitEvidence({ model: model(), evidence: evidence(largePatch), style: "style" });
+    expect(result.candidates.map((candidate) => candidate.representation)).toEqual([
+      "context",
+      "context",
+      "compact",
+      "compact",
+      "analyst",
+    ]);
+    expect(result.route).not.toBe("none");
   });
 
   it("includes authoritative staged data in analyst prompts", () => {

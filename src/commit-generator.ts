@@ -10,11 +10,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { TokenTallyCollector, type TokenTally } from "./usage-format.js";
 import {
-  cacheConfidenceFromUsage,
   degradeStagedEvidence,
   MAX_ANALYSIS_BYTES,
   reduceStagedEvidence,
-  type CacheConfidence,
   type CommitIntent,
   type CommitOperation,
   type DiffAnalysis,
@@ -114,7 +112,6 @@ export function outputLadderRungs(
 
 export interface CommitGenerationRequest extends CommitEvidenceRequest {
   readonly signal?: AbortSignal | undefined;
-  readonly cacheConfidence?: CacheConfidence | undefined;
   /** Session thinking level; endpoints that mandate reasoning reject requests without it. */
   readonly reasoning?: ModelThinkingLevel | undefined;
 }
@@ -123,7 +120,6 @@ export interface CommitGenerationDiagnostics {
   readonly route: CommitRepresentation;
   readonly intentIncluded: boolean;
   readonly attempts: 1 | 2;
-  readonly cacheConfidence: CacheConfidence;
   /** True when the message was recovered from a response the provider cut off. */
   readonly truncated?: boolean | undefined;
   readonly candidate: Pick<CommitEvidenceSpec, "representation" | "estimatedInputTokens" | "inputBudget" | "outputReserve" | "safetyReserve" | "diffBytes" | "intentIncluded">;
@@ -196,8 +192,6 @@ export class CommitMessageGenerator {
       style: request.style,
       ...(request.intent === undefined ? {} : { intent: request.intent }),
       ...(request.operation === undefined ? {} : { operation: request.operation }),
-      ...(request.session === undefined ? {} : { session: request.session }),
-      ...(request.cacheConfidence === undefined ? {} : { cacheConfidence: request.cacheConfidence }),
       ...(request.reasoning === undefined ? {} : { reasoning: request.reasoning }),
     };
     const plan = planCommitEvidence(evidenceRequest);
@@ -304,7 +298,6 @@ export class CommitMessageGenerator {
           route: "analyst-assisted",
           intentIncluded: false,
           attempts: 1,
-          cacheConfidence: effectiveCacheConfidence(request, analystResponse),
           candidate: analystCandidate,
           analystUsage: budget.analystTally.totals,
         },
@@ -326,7 +319,6 @@ export class CommitMessageGenerator {
           route: "analyst-assisted",
           intentIncluded: false,
           attempts: 1,
-          cacheConfidence: request.cacheConfidence ?? "unknown",
           candidate: finalCandidates.withoutIntent,
           analystUsage: budget.analystTally.totals,
         },
@@ -387,7 +379,6 @@ export class CommitMessageGenerator {
         route: representation,
         intentIncluded: candidate.intentIncluded,
         attempts: meta.attempts,
-        cacheConfidence: effectiveCacheConfidence(request, meta.response),
         ...(meta.truncated ? { truncated: true } : {}),
         candidate: candidateDiagnostics(candidate),
         usage: budget.tally.totals,
@@ -479,7 +470,7 @@ export class CommitMessageGenerator {
     try {
       const response = await this.client.complete(
         request.model,
-        { systemPrompt: candidate.systemPrompt, messages: [...(candidate.contextMessages ?? [candidate.userMessage])], tools: [] },
+        { systemPrompt: candidate.systemPrompt, messages: [candidate.userMessage], tools: [] },
         {
           maxTokens: rung.reserve,
           ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -526,7 +517,6 @@ export class CommitMessageGenerator {
         route: routeForCandidate(candidate),
         intentIncluded: candidate.intentIncluded,
         attempts,
-        cacheConfidence: effectiveCacheConfidence(request, response),
         candidate,
         usage: budget.tally.totals,
         ...(analystResponse === undefined ? {} : { analystUsage: budget.analystTally.totals }),
@@ -554,7 +544,6 @@ export class CommitMessageGenerator {
         route: routeForCandidate(candidate),
         intentIncluded: candidate.intentIncluded,
         attempts,
-        cacheConfidence: effectiveCacheConfidence(request, response),
         candidate,
         usage: budget.tally.totals,
         ...(analystResponse === undefined ? {} : { analystUsage: budget.analystTally.totals }),
@@ -579,7 +568,6 @@ export class CommitMessageGenerator {
         route: routeForCandidate(candidate),
         intentIncluded: candidate.intentIncluded,
         attempts,
-        cacheConfidence: effectiveCacheConfidence(request, response),
         candidate,
         usage: budget.tally.totals,
         ...(analystResponse === undefined ? {} : { analystUsage: budget.analystTally.totals }),
@@ -611,11 +599,6 @@ function findCheaperCandidate(
     && candidate.estimatedInputTokens < selected.estimatedInputTokens
     && (!candidate.intentIncluded || !selected.intentIncluded),
   );
-}
-
-function effectiveCacheConfidence(request: CommitGenerationRequest, response: AssistantMessage): CacheConfidence {
-  const actual = cacheConfidenceFromUsage(response.usage);
-  return actual === "unknown" ? request.cacheConfidence ?? "unknown" : actual;
 }
 
 function routeForCandidate(candidate: CommitEvidenceSpec): CommitRepresentation {

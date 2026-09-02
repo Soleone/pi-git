@@ -92,7 +92,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
     description: "Commit staged changes, or open the manual commit editor",
     handler: async (args, ctx) => {
       if (!requireTui(ctx)) return;
-      await runManualCommit(pi, ctx, makeGit(ctx), args.trim() || undefined);
+      await runManualCommit(pi, ctx, makeGit(ctx), args.trim() ? { message: args.trim() } : {});
     },
   });
 

@@ -112,3 +112,25 @@ export function classifyFormattingOnly(
 
   return { formattingOnly: true, unverifiablePaths };
 }
+
+/**
+ * Commit message for a pure reformat, so both commit paths skip the model with
+ * the same wording. Undefined when any change is not formatting-only; an empty
+ * file list is never formatting-only, because there is nothing to commit.
+ */
+export function formattingOnlyMessage(
+  files: readonly GitStagedFile[],
+  compactPatch: string,
+): { readonly subject: string; readonly message: string } | undefined {
+  if (files.length === 0) return undefined;
+  if (!classifyFormattingOnly(files, compactPatch).formattingOnly) return undefined;
+
+  const only = files.length === 1 ? files[0] : undefined;
+  const subject = only
+    ? `style: format ${only.path}`
+    : `style: format ${files.length} files`;
+  return {
+    subject,
+    message: `${subject}\n\nWhitespace-only changes detected by pi-git; generated without a model call.`,
+  };
+}

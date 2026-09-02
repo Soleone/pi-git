@@ -39,8 +39,10 @@ function fakeGit(options: {
   staged?: boolean;
   finalSnapshot?: GitSnapshot | { root: string; branchRef?: string; head?: string; indexTree?: string };
   commit?: (file: string) => Promise<void>;
+  patch?: string;
 } = {}): GitService {
   const captured = snapshot();
+  const patch = options.patch ?? "diff --git a/file b/file\n+change\n";
   return {
     assertSupportedRepository: vi.fn(async () => ({ root: captured.root, branchRef: captured.branchRef, head: captured.head })),
     stageAll: vi.fn(async () => undefined),
@@ -52,8 +54,8 @@ function fakeGit(options: {
       shortStat: "1 file changed",
       nameStatus: "M\0file\0",
       numstat: "1\t0\tfile\0",
-      contextPatch: "diff --git a/file b/file\n+change\n",
-      compactPatch: "diff --git a/file b/file\n+change\n",
+      contextPatch: patch,
+      compactPatch: patch,
     })),
     maybeSnapshot: vi.fn(async () => options.finalSnapshot ?? captured),
     commitFromFile: vi.fn(async (file: string) => options.commit?.(file)),
@@ -230,6 +232,24 @@ describe("QuickCommitController", () => {
     await secondController.shutdown();
     expect(secondController.state).toBe("cancelled");
     secondGeneration.resolve(response());
+  });
+
+  it("commits a pure reformat without any model call", async () => {
+    const surface = ui();
+    const commit = vi.fn(async () => undefined);
+    const reformat = "diff --git a/file b/file\nindex 1..2 100644\n--- a/file\n+++ b/file\n@@ -1,1 +1,3 @@ fn\n-const value = compute(alpha, beta);\n+const value = compute(\n+  alpha,\n+  beta,\n+);\n";
+    const git = fakeGit({ commit, patch: reformat });
+    const modelRegistry: QuickCommitModelRegistry = {
+      hasConfiguredAuth: () => true,
+      complete: vi.fn(async () => response("feat: should not be used")),
+    };
+    const controller = new QuickCommitController();
+    controller.start({ git, modelRegistry, model: model(), commitStyle: "style", ui: surface.ui });
+    await controller.job?.wait();
+
+    expect(controller.state).toBe("succeeded");
+    expect(modelRegistry.complete).not.toHaveBeenCalled();
+    expect(surface.notices.join(" ")).toContain("style: format file");
   });
 
   it("stops successfully without committing when staging produces no changes", async () => {

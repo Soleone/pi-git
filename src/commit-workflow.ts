@@ -1,32 +1,40 @@
-import type { Api, AssistantMessage, Message, Model, UserMessage } from "@earendil-works/pi-ai";
-import { BorderedLoader, buildSessionContext, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { cacheConfidenceFromUsage, captureStagedEvidence, extractRecentUserIntent, snapshotCacheKey, type CacheConfidence, type CommitIntent, type CommitSessionContext, type StagedEvidence } from "./commit-evidence.js";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { BorderedLoader, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { captureStagedEvidence, snapshotCacheKey, type StagedEvidence } from "./commit-evidence.js";
 import type { CommitRepresentation } from "./evidence-plan.js";
 import {
   CommitMessageGenerator,
   type CommitGenerationRequest,
-  type CommitGenerationDiagnostics,
   type CommitGenerationResult,
   type CommitModelClient,
 } from "./commit-generator.js";
 import { loadCommitStyle } from "./commit-message.js";
-import { formatTokenTally, type TokenTally } from "./usage-format.js";
+import { formattingOnlyMessage } from "./mechanical-diff.js";
+import { TokenTallyCollector, formatUsageCostLine, type TokenTally } from "./usage-format.js";
 import { snapshotsMatch, type GitMaybeSnapshot, type GitService } from "./git-service.js";
 import { CommitEditor, type CommitEditorResult } from "./ui/commit-editor.js";
 const GENERATION_TIMEOUT_MS = 180_000;
-const MAX_CACHED_SESSION_MESSAGES = 16;
-const MAX_CACHED_SESSION_BYTES = 32 * 1024;
+
+export interface ManualCommitOptions {
+  /** Commit this message straight away instead of opening the editor. */
+  readonly message?: string;
+  /** Draft shown when the editor opens. */
+  readonly prefill?: string;
+  /** Refuse to commit when the staged snapshot moved after the draft was made. */
+  readonly expectedSnapshot?: GitMaybeSnapshot;
+  readonly onMessageChange?: (message: string) => void;
+  readonly onEditorReady?: () => void;
+  /** Bills every model call this flow makes, rewrites included, so the notice can show the cost. */
+  readonly usage?: TokenTallyCollector;
+}
 
 export async function runManualCommit(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   git: GitService,
-  directMessage?: string,
-  prefill = "",
-  expectedSnapshot?: GitMaybeSnapshot,
-  onMessageChange?: (message: string) => void,
-  onEditorReady?: () => void,
+  options: ManualCommitOptions = {},
 ): Promise<boolean> {
+  const { message: directMessage, prefill = "", expectedSnapshot, onMessageChange, onEditorReady, usage } = options;
   let staged: StagedEvidence;
   try {
     staged = await captureStagedEvidence(git);
@@ -40,15 +48,21 @@ export async function runManualCommit(
   }
 
   if (directMessage !== undefined) {
-    return commitDirect(ctx, git, directMessage, expectedSnapshot);
+    return commitDirect(ctx, git, directMessage, expectedSnapshot, usage);
   }
 
   let message = prefill;
+  let editorReadyFired = false;
   while (true) {
     const editorResult = await ctx.ui.custom<CommitEditorResult | undefined>(
       (tui, theme, _keybindings, done) => {
         const editor = new CommitEditor(tui, theme, staged.stat, message, done);
-        if (onEditorReady) queueMicrotask(onEditorReady);
+        // The draft notice belongs to the draft, not to every editor re-open,
+        // so a rewrite must not replay the pre-rewrite text and cost.
+        if (onEditorReady && !editorReadyFired) {
+          editorReadyFired = true;
+          queueMicrotask(onEditorReady);
+        }
         return editor;
       },
     );
@@ -71,6 +85,7 @@ export async function runManualCommit(
       );
       if (rewritten?.ok) {
         message = rewritten.message;
+        usage?.merge(rewritten.diagnostics.usage);
         onMessageChange?.(message);
         staged = await captureStagedEvidence(git);
       }
@@ -81,7 +96,7 @@ export async function runManualCommit(
         const root = await git.root();
         const result = await pi.exec("gt", ["create", "--message", message, "--no-interactive"], { cwd: root, timeout: 120_000 });
         if (result.code === 0) {
-          ctx.ui.notify(`Graphite committed\n  ${firstLine(message)}`, "info");
+          ctx.ui.notify(`Graphite committed\n  ${firstLine(message)}${formatUsageCostLine(usage?.totals)}`, "info");
           return true;
         }
         ctx.ui.notify(`Graphite failed: ${result.stderr || result.stdout}`, "error");
@@ -91,7 +106,7 @@ export async function runManualCommit(
       continue;
     }
 
-    return commitDirect(ctx, git, message, expectedSnapshot);
+    return commitDirect(ctx, git, message, expectedSnapshot, usage);
   }
 }
 
@@ -171,16 +186,20 @@ export async function runAmendCommit(
   }
 }
 
+/** Where a draft's text came from, so the notice can name it. */
+type DraftRoute = CommitRepresentation | "formatting-only";
+
+interface SmartDraft {
+  readonly message: string;
+  readonly snapshot: GitMaybeSnapshot;
+  readonly cacheKey: string;
+  readonly route: DraftRoute;
+  readonly truncated: boolean;
+  readonly usage: TokenTally | undefined;
+}
+
 export class SmartCommitSession {
-  private draft:
-    | {
-        readonly message: string;
-        readonly stat: string;
-        readonly snapshot: GitMaybeSnapshot;
-        readonly cacheKey: string;
-        readonly diagnostics: CommitGenerationDiagnostics;
-      }
-    | undefined;
+  private draft: SmartDraft | undefined;
 
   async run(pi: ExtensionAPI, ctx: ExtensionContext, git: GitService, commitStyle: string): Promise<"committed" | "cancelled" | "started"> {
     ctx.ui.notify("Smart commit: started, generating draft...", "info");
@@ -197,67 +216,39 @@ export class SmartCommitSession {
     }
 
     const model = ctx.model as Model<Api> | undefined;
-    const intent = extractSmartIntent(ctx);
-    const reusableSession = model ? buildReusableSessionContext(ctx, model) : undefined;
-    const cacheKey = model ? snapshotCacheKey(staged.snapshot, model, commitStyle, intent, reusableSession?.session) : "";
-    if (!this.draft || this.draft.cacheKey !== cacheKey) {
-      if (!model) {
-        ctx.ui.notify("No model selected. Select a model before generating a commit draft.", "error");
-        return "cancelled";
-      }
-      if (ctx.modelRegistry.hasConfiguredAuth && !ctx.modelRegistry.hasConfiguredAuth(model)) {
-        ctx.ui.notify("The selected model has no available authentication.", "error");
-        return "cancelled";
-      }
-
-      const generated = await generateWithLoader(ctx, {
-        model,
-        evidence: staged,
-        style: commitStyle,
-        ...(intent === undefined ? {} : { intent }),
-        ...(reusableSession?.session === undefined ? {} : {
-          session: reusableSession.session,
-          cacheConfidence: reusableSession.cacheConfidence,
-        }),
-        ...(ctx.thinkingLevel === undefined ? {} : { reasoning: ctx.thinkingLevel }),
-      });
-      if (!generated) return "cancelled";
-      if (!generated.ok) {
-        ctx.ui.notify(formatGenerationFailure("Commit draft", generated), "error");
-        return "cancelled";
-      }
-      this.draft = {
-        message: generated.message,
-        stat: staged.stat,
-        snapshot: staged.snapshot,
-        cacheKey,
-        diagnostics: generated.diagnostics,
-      };
+    if (!model) {
+      ctx.ui.notify("No model selected. Select a model before generating a commit draft.", "error");
+      return "cancelled";
     }
 
-    const draft = this.draft;
-    if (!draft) return "cancelled";
+    const cacheKey = snapshotCacheKey(staged.snapshot, model, commitStyle);
+    let draft = this.draft;
+    if (!draft || draft.cacheKey !== cacheKey) {
+      draft = await this.createDraft(ctx, model, staged, commitStyle, cacheKey);
+      if (!draft) return "cancelled";
+      this.draft = draft;
+    }
+
     const current = await git.maybeSnapshot();
     if (!snapshotsMatch(draft.snapshot, current)) {
       this.draft = undefined;
-      ctx.ui.notify("The staged snapshot changed; the commit draft was discarded.", "warning");
+      ctx.ui.notify(`The staged snapshot changed; the commit draft was discarded.${formatUsageCostLine(draft.usage)}`, "warning");
       return "started";
     }
 
     const editorText = ctx.ui.getEditorText();
+    const usage = new TokenTallyCollector();
+    usage.merge(draft.usage);
     try {
-      const committed = await runManualCommit(
-        pi,
-        ctx,
-        git,
-        undefined,
-        draft.message,
-        draft.snapshot,
-        (message) => {
+      const committed = await runManualCommit(pi, ctx, git, {
+        prefill: draft.message,
+        expectedSnapshot: draft.snapshot,
+        onMessageChange: (message) => {
           if (this.draft) this.draft = { ...this.draft, message };
         },
-        () => notifySmartDraftReady(ctx, this.draft ?? draft),
-      );
+        onEditorReady: () => notifySmartDraftReady(ctx, draft),
+        usage,
+      });
       if (committed) {
         this.draft = undefined;
         return "committed";
@@ -269,17 +260,57 @@ export class SmartCommitSession {
     }
   }
 
+  /**
+   * Draft the same way quick commit does: the staged snapshot, the project's
+   * commit style, and nothing inferred from the conversation.
+   */
+  private async createDraft(
+    ctx: ExtensionContext,
+    model: Model<Api>,
+    staged: StagedEvidence,
+    commitStyle: string,
+    cacheKey: string,
+  ): Promise<SmartDraft | undefined> {
+    const formattingOnly = formattingOnlyMessage(staged.files, staged.compactPatch);
+    if (formattingOnly) {
+      return {
+        message: formattingOnly.message,
+        snapshot: staged.snapshot,
+        cacheKey,
+        route: "formatting-only",
+        truncated: false,
+        usage: undefined,
+      };
+    }
+    if (ctx.modelRegistry.hasConfiguredAuth && !ctx.modelRegistry.hasConfiguredAuth(model)) {
+      ctx.ui.notify("The selected model has no available authentication.", "error");
+      return undefined;
+    }
+
+    const generated = await generateWithLoader(ctx, {
+      model,
+      evidence: staged,
+      style: commitStyle,
+      ...(ctx.thinkingLevel === undefined ? {} : { reasoning: ctx.thinkingLevel }),
+    });
+    if (!generated) return undefined;
+    if (!generated.ok) {
+      ctx.ui.notify(formatGenerationFailure("Commit draft", generated), "error");
+      return undefined;
+    }
+    return {
+      message: generated.message,
+      snapshot: staged.snapshot,
+      cacheKey,
+      route: generated.diagnostics.route,
+      truncated: generated.diagnostics.truncated === true,
+      usage: generated.diagnostics.usage,
+    };
+  }
+
   clear(): void {
     this.draft = undefined;
     // The next run will regenerate even when the Git snapshot is unchanged.
-  }
-
-  hasDraft(): boolean {
-    return this.draft !== undefined;
-  }
-
-  get draftDiagnostics(): CommitGenerationDiagnostics | undefined {
-    return this.draft?.diagnostics;
   }
 }
 
@@ -289,7 +320,6 @@ async function rewriteMessage(
   style: string,
   expectedSnapshot: GitMaybeSnapshot,
   currentMessage: string,
-  intent?: CommitIntent,
 ): Promise<Extract<CommitGenerationResult, { ok: true }> | undefined> {
   if (!ctx.model) {
     ctx.ui.notify("No model selected for rewriting.", "error");
@@ -314,7 +344,6 @@ async function rewriteMessage(
     model: ctx.model as Model<Api>,
     evidence,
     style,
-    ...(intent === undefined ? {} : { intent }),
     operation: { kind: "rewrite", currentMessage, instruction },
     ...(ctx.thinkingLevel === undefined ? {} : { reasoning: ctx.thinkingLevel }),
   });
@@ -369,6 +398,7 @@ async function commitDirect(
   git: GitService,
   message: string,
   expectedSnapshot?: GitMaybeSnapshot,
+  usage?: TokenTallyCollector,
 ): Promise<boolean> {
   const cleanMessage = message.trim();
   if (!cleanMessage) {
@@ -384,7 +414,7 @@ async function commitDirect(
   }
   try {
     await git.commitMessage(cleanMessage);
-    ctx.ui.notify(`Committed ${firstLine(cleanMessage)}`, "info");
+    ctx.ui.notify(`Committed ${firstLine(cleanMessage)}${formatUsageCostLine(usage?.totals)}`, "info");
     return true;
   } catch (error: unknown) {
     ctx.ui.notify(formatError(error), "error");
@@ -392,148 +422,23 @@ async function commitDirect(
   }
 }
 
-function filterCachedSessionMessages(messages: readonly unknown[]): Message[] {
-  const reverse: Message[] = [];
-  let bytes = 0;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (reverse.length >= MAX_CACHED_SESSION_MESSAGES) break;
-    const sanitized = sanitizeCachedSessionMessage(messages[index]);
-    if (!sanitized) continue;
-    const messageText = cachedMessageText(sanitized);
-    const messageBytes = Buffer.byteLength(messageText, "utf8");
-    if (messageBytes > MAX_CACHED_SESSION_BYTES) continue;
-    if (bytes + messageBytes > MAX_CACHED_SESSION_BYTES) break;
-    reverse.push(sanitized);
-    bytes += messageBytes;
-  }
-  const ordered = reverse.reverse();
-  while (ordered[0]?.role === "assistant") ordered.shift();
-  return ordered;
-}
-
-function sanitizeCachedSessionMessage(message: unknown): Message | undefined {
-  const value = message as { role?: unknown; content?: unknown; timestamp?: unknown };
-  if (value.role === "user") {
-    const content = textOnlyCachedUserContent(value.content);
-    if (content === undefined) return undefined;
-    return {
-      role: "user",
-      content,
-      timestamp: typeof value.timestamp === "number" ? value.timestamp : 0,
-    };
-  }
-  if (value.role !== "assistant" || !Array.isArray(value.content)) return undefined;
-  if (value.content.some((block) => Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "toolCall")) return undefined;
-
-  // Keep the provider-compatible assistant envelope, but remove thinking
-  // signatures and any non-text content. A prefix containing only stopped
-  // plain-text assistant messages is safe to replay with tools disabled.
-  const assistant = message as AssistantMessage;
-  if (assistant.stopReason !== "stop") return undefined;
-  const textBlocks = value.content.filter((block): block is { type: "text"; text: string } =>
-    Boolean(block)
-    && typeof block === "object"
-    && (block as { type?: unknown }).type === "text"
-    && typeof (block as { text?: unknown }).text === "string",
-  );
-  if (textBlocks.length === 0) return undefined;
-  return { ...assistant, content: textBlocks };
-}
-
-function textOnlyCachedUserContent(content: unknown): UserMessage["content"] | undefined {
-  if (typeof content === "string") {
-    return content.trim() && !content.trimStart().startsWith("/") ? content : undefined;
-  }
-  if (!Array.isArray(content) || content.length === 0) return undefined;
-  const blocks = content.filter((block): block is { type: "text"; text: string } =>
-    Boolean(block)
-    && typeof block === "object"
-    && (block as { type?: unknown }).type === "text"
-    && typeof (block as { text?: unknown }).text === "string",
-  );
-  if (blocks.length !== content.length) return undefined;
-  const combined = blocks.map((block) => block.text).join("\n");
-  return combined.trim() && !combined.trimStart().startsWith("/") ? blocks : undefined;
-}
-
-function cachedMessageText(message: Message): string {
-  if (message.role === "user") return typeof message.content === "string" ? message.content : message.content.map((block) => block.type === "text" ? block.text : "").join("\n");
-  if (message.role === "assistant") return message.content.map((block) => block.type === "text" ? block.text : "").join("\n");
-  return "";
-}
-
-function buildReusableSessionContext(
-  ctx: ExtensionContext,
-  model: Model<Api>,
-): { readonly session: CommitSessionContext; readonly cacheConfidence: CacheConfidence } | undefined {
-  try {
-    const manager = ctx.sessionManager;
-    if (!manager || typeof manager.getEntries !== "function" || typeof manager.getLeafId !== "function") return undefined;
-    const sessionContext = buildSessionContext(manager.getEntries(), manager.getLeafId());
-    const messages = filterCachedSessionMessages(sessionContext.messages);
-    if (messages.length === 0) return undefined;
-
-    const latestAssistant = [...sessionContext.messages].reverse().find((message) => message.role === "assistant");
-    const modelMatches = latestAssistant?.role === "assistant"
-      && latestAssistant.stopReason === "stop"
-      && latestAssistant.provider === model.provider
-      && latestAssistant.model === model.id;
-    const cacheConfidence: CacheConfidence = modelMatches
-      ? cacheConfidenceFromUsage(latestAssistant.usage)
-      : "cold";
-    const getContextUsage = (ctx as unknown as { getContextUsage?: () => { tokens: number | null } | undefined }).getContextUsage;
-    const currentUsageTokens = typeof getContextUsage === "function" ? getContextUsage()?.tokens ?? null : null;
-    const getSessionId = (manager as { getSessionId?: () => string }).getSessionId;
-    const getLeafId = manager.getLeafId.bind(manager);
-    return {
-      session: {
-        messages,
-        currentUsageTokens,
-        ...(typeof getSessionId === "function" ? { sessionId: getSessionId.call(manager) } : {}),
-        leafId: getLeafId(),
-      },
-      cacheConfidence,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function extractSmartIntent(ctx: ExtensionContext): CommitIntent | undefined {
-  try {
-    const manager = ctx.sessionManager;
-    if (!manager || typeof manager.buildContextEntries !== "function") return undefined;
-    return extractRecentUserIntent(manager.buildContextEntries());
-  } catch {
-    return undefined;
-  }
-}
-
-function notifySmartDraftReady(
-  ctx: ExtensionContext,
-  draft: { readonly message: string; readonly diagnostics: CommitGenerationDiagnostics },
-): void {
+function notifySmartDraftReady(ctx: ExtensionContext, draft: SmartDraft): void {
   ctx.ui.notify(
-    `Smart commit: draft ready (algorithm: ${routeLabel(draft.diagnostics.route)}${draft.diagnostics.truncated ? ", recovered from a truncated reply" : ""})\n  ${firstLine(draft.message)}${usageLine(draft.diagnostics.usage)}\nReview before committing`,
+    `Smart commit: draft ready (algorithm: ${routeLabel(draft.route)}${draft.truncated ? ", recovered from a truncated reply" : ""})\n  ${firstLine(draft.message)}${formatUsageCostLine(draft.usage)}\nReview before committing`,
     "info",
   );
 }
 
-/** The tokens these model calls spent are invisible to the pi session footer. */
-function usageLine(usage: TokenTally | undefined): string {
-  return usage && usage.calls > 0 ? `\n  ${formatTokenTally(usage, { showCalls: true })}` : "";
-}
-
-function routeLabel(route: CommitRepresentation): string {
+function routeLabel(route: DraftRoute): string {
   if (route === "analyst-assisted") return "extended analysis";
-  if (route === "cached-session") return "cached session";
   if (route === "compact") return "compact diff";
+  if (route === "formatting-only") return "formatting only, no model call";
   return "fresh diff";
 }
 
 function formatGenerationFailure(prefix: string, result: Extract<CommitGenerationResult, { ok: false }>): string {
   // A rejected draft still spent the tokens; show them next to the reason.
-  return `${prefix} rejected: ${result.reason}${usageLine(result.diagnostics?.usage)}`;
+  return `${prefix} rejected: ${result.reason}${formatUsageCostLine(result.diagnostics?.usage)}`;
 }
 
 

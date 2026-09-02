@@ -53,14 +53,14 @@ async function repository(): Promise<string> {
   return cwd;
 }
 
-function response(message = "feat: update file"): AssistantMessage {
+function response(message = "feat: update file", usage: Record<string, unknown> = {}): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text: message }],
     api: "openai-completions",
     provider: "test",
     model: "test-model",
-    usage: {} as AssistantMessage["usage"],
+    usage: { input: 1_200, output: 34, cacheRead: 0, cacheWrite: 0, totalTokens: 1_234, cost: { input: 0.02, output: 0.01, cacheRead: 0, cacheWrite: 0, total: 0.03 }, ...usage } as AssistantMessage["usage"],
     stopReason: "stop",
     timestamp: Date.now(),
   };
@@ -75,6 +75,47 @@ function surface(): QuickCommitUi {
     isAlive: () => true,
     notify: () => undefined,
   };
+}
+
+/**
+ * A smart-commit context for both `ui.custom` surfaces. The generation loader is
+ * the only component carrying an abort signal, so it is awaited the way pi awaits
+ * it; the commit editor is answered with the scripted result instead.
+ * `editorResult` sees the notices collected so far, so a test can echo the draft
+ * back the way a reviewer would.
+ */
+function smartContext(
+  cwd: string,
+  notifications: string[],
+  complete: () => AssistantMessage,
+  editorResult: (draftNotices: string[]) => unknown,
+): ExtensionContext {
+  return {
+    cwd,
+    model: selectedModel(),
+    modelRegistry: { hasConfiguredAuth: () => true, complete: async () => complete() },
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      input: async () => "make the subject imperative",
+      getEditorText: () => "",
+      setEditorText: () => undefined,
+      custom: async (factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (value: unknown) => void) => { dispose?: () => void }) => {
+        const theme = { fg: (_color: string, value: string) => value, bold: (value: string) => value };
+        const tui = { requestRender: () => undefined };
+        let settle!: (value: unknown) => void;
+        const pending = new Promise<unknown>((resolve) => {
+          settle = resolve;
+        });
+        let component: { dispose?: () => void } | undefined;
+        component = factory(tui, theme, {}, (value) => {
+          component?.dispose?.();
+          settle(value);
+        });
+        if (component && typeof component === "object" && "signal" in component) return pending;
+        return editorResult(notifications);
+      },
+    },
+  } as unknown as ExtensionContext;
 }
 
 afterEach(async () => {
@@ -93,7 +134,7 @@ describe("quick commit temporary-repository integration", () => {
     const notifications: string[] = [];
     const context = { ui: { notify: (message: string) => notifications.push(message) } } as unknown as ExtensionContext;
 
-    expect(await runManualCommit({} as ExtensionAPI, context, new GitService(executor, cwd), "feat: first commit")).toBe(true);
+    expect(await runManualCommit({} as ExtensionAPI, context, new GitService(executor, cwd), { message: "feat: first commit" })).toBe(true);
     expect((await git(cwd, ["log", "-1", "--pretty=%s"])).trim()).toBe("feat: first commit");
     expect(notifications).toContain("Committed feat: first commit");
   });
@@ -126,41 +167,81 @@ describe("quick commit temporary-repository integration", () => {
     await fs.writeFile(path.join(cwd, "first.txt"), "first\n");
     await git(cwd, ["add", "--", "first.txt"]);
 
-    let customCalls = 0;
-    const context = {
-      model: selectedModel(),
-      modelRegistry: {
-        hasConfiguredAuth: () => true,
-        complete: async () => response("feat: smart first commit"),
+    const notifications: string[] = [];
+    const context = smartContext(
+      cwd,
+      notifications,
+      () => response("feat: smart first commit"),
+      (draftNotices) => {
+        const draft = draftNotices.find((message) => message.startsWith("Smart commit: draft ready")) ?? "";
+        return { action: "commit", message: draft.split("\n")[1] ?? "feat: smart first commit" };
       },
-      ui: {
-        notify: () => undefined,
-        getEditorText: () => "",
-        setEditorText: () => undefined,
-        custom: async (factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (value: unknown) => void) => unknown) => {
-          customCalls += 1;
-          if (customCalls === 1) {
-            return new Promise<unknown>((resolve) => {
-              let component: { dispose?: () => void } | undefined;
-              component = factory(
-                { requestRender: () => undefined },
-                { fg: (_color: string, value: string) => value, bold: (value: string) => value },
-                {},
-                (value) => {
-                  component?.dispose?.();
-                  resolve(value);
-                },
-              ) as { dispose?: () => void };
-            });
-          }
-          return { action: "commit", message: "feat: smart first commit" };
-        },
-      },
-    } as unknown as ExtensionContext;
+    );
 
     const result = await new SmartCommitSession().run({} as ExtensionAPI, context, new GitService(executor, cwd), "style");
+    // The draft-ready notice is queued as a microtask while the editor opens.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(result).toBe("committed");
     expect((await git(cwd, ["log", "-1", "--pretty=%s"])).trim()).toBe("feat: smart first commit");
+    // Smart commit bills the draft both before review and on completion.
+    expect(notifications.some((message) => message.startsWith("Smart commit: draft ready (algorithm: fresh diff)") && message.includes("$0.03 \u26a10 \u21911.2k \u219334"))).toBe(true);
+    expect(notifications).toContain("Committed feat: smart first commit\n  $0.03 \u26a10 \u21911.2k \u219334");
+  });
+
+  it("bills a ctrl+r rewrite together with the original draft", async () => {
+    const cwd = await repository();
+    await fs.writeFile(path.join(cwd, "file.txt"), "rewritten content\n");
+    await git(cwd, ["add", "--", "file.txt"]);
+
+    const notifications: string[] = [];
+    const replies = [
+      response("feat: first draft"),
+      response("feat: rewritten draft", { input: 1_000, output: 20, cost: { input: 0.02, output: 0.0, cacheRead: 0, cacheWrite: 0, total: 0.02 } }),
+    ];
+    let replyIndex = 0;
+    let editorVisits = 0;
+    const context = smartContext(cwd, notifications, () => replies[replyIndex++] ?? replies[0]!, () => {
+      editorVisits += 1;
+      return editorVisits === 1
+        ? { action: "rewrite", message: "feat: first draft" }
+        : { action: "commit", message: "feat: rewritten draft" };
+    });
+
+    const result = await new SmartCommitSession().run({} as ExtensionAPI, context, new GitService(executor, cwd), "style");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(result).toBe("committed");
+    expect((await git(cwd, ["log", "-1", "--pretty=%s"])).trim()).toBe("feat: rewritten draft");
+    // The draft notice belongs to the draft, so a rewrite must not replay it.
+    expect(notifications.filter((message) => message.startsWith("Smart commit: draft ready"))).toHaveLength(1);
+    expect(notifications).toContain("Committed feat: rewritten draft\n  $0.05 \u26a10 \u21912.2k \u219354 \u00b7 2 calls");
+  });
+
+  it("drafts a staged reformat smartly without spending a model call", async () => {
+    const cwd = await repository();
+    await fs.writeFile(path.join(cwd, "file.txt"), "before    ;\n");
+    await git(cwd, ["add", "--", "file.txt"]);
+
+    const notifications: string[] = [];
+    let modelCalls = 0;
+    const context = smartContext(
+      cwd,
+      notifications,
+      () => {
+        modelCalls += 1;
+        return response("feat: must not be used");
+      },
+      () => ({ action: "commit", message: "style: format file.txt" }),
+    );
+
+    const result = await new SmartCommitSession().run({} as ExtensionAPI, context, new GitService(executor, cwd), "style");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(result).toBe("committed");
+    expect(modelCalls).toBe(0);
+    expect(notifications.some((message) => message.startsWith("Smart commit: draft ready (algorithm: formatting only, no model call)"))).toBe(true);
+    expect(notifications).toContain("Committed style: format file.txt");
+    expect((await git(cwd, ["log", "-1", "--pretty=%s"])).trim()).toBe("style: format file.txt");
   });
 
   it("stages and commits all changes successfully", async () => {

@@ -36,6 +36,17 @@ export class TokenTallyCollector {
     this.draft.cost += count(usage.cost?.total);
   }
 
+  /** Fold an already-summed tally in, so a second phase adds to the same bill. */
+  merge(tally: TokenTally | undefined): void {
+    if (!tally) return;
+    this.draft.calls += tally.calls;
+    this.draft.input += tally.input;
+    this.draft.output += tally.output;
+    this.draft.cacheRead += tally.cacheRead;
+    this.draft.cacheWrite += tally.cacheWrite;
+    this.draft.cost += tally.cost;
+  }
+
   get totals(): TokenTally {
     return { ...this.draft };
   }
@@ -66,6 +77,14 @@ export function compactTokenCount(value: number): string {
   if (value >= 10_000) return `${Math.round(value / 1_000)}k`;
   if (value >= 1_000) return `${Math.round(value / 100) / 10}k`;
   return String(value);
+}
+
+/**
+ * Indented cost line for a notification. Quick and smart commits render the
+ * generation bill the same way, so neither can quietly drop it.
+ */
+export function formatUsageCostLine(usage: TokenTally | undefined): string {
+  return usage && usage.calls > 0 ? `\n  ${formatTokenTally(usage, { showCalls: true })}` : "";
 }
 
 function count(value: number | undefined): number {

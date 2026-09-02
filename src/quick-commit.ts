@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Api, AssistantMessage, Message, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { isAbortError } from "./abort.js";
-import { formatTokenTally, type TokenTally } from "./usage-format.js";
+import { formatUsageCostLine, type TokenTally } from "./usage-format.js";
 import { GitService, snapshotsMatch } from "./git-service.js";
 import {
   captureStagedEvidence,
@@ -11,7 +11,7 @@ import {
   type CommitIntent,
   type StagedEvidence,
 } from "./commit-evidence.js";
-import { classifyFormattingOnly } from "./mechanical-diff.js";
+import { formattingOnlyMessage } from "./mechanical-diff.js";
 import {
   CommitMessageGenerator,
   type CommitGenerationDiagnostics,
@@ -57,7 +57,7 @@ export interface QuickCommitStartRequest {
   /** Session thinking level forwarded to the model call. */
   readonly thinkingLevel?: ModelThinkingLevel | undefined;
   readonly timeoutMs?: number;
-  /** Explicit intent is supported for callers that do not want implicit session history. */
+  /** Explicit intent is supported for callers that do not want to commit blind. */
   readonly intent?: CommitIntent | string | undefined;
 }
 
@@ -163,14 +163,6 @@ export class QuickCommitJob {
     return this.settledValue;
   }
 
-  get commitSubject(): string {
-    return this.subject;
-  }
-
-  get generationDiagnostics(): CommitGenerationDiagnostics | undefined {
-    return this.diagnosticsValue;
-  }
-
   wait(): Promise<QuickCommitState> {
     return this.settledPromise;
   }
@@ -208,17 +200,20 @@ export class QuickCommitJob {
       }
 
       // Pure reformatting gets a deterministic message without any model call.
-      const explicitOrSessionIntent = typeof this.request.intent === "string"
-        ? normalizeCommitIntent(this.request.intent, "explicit")
+      const explicitIntent = typeof this.request.intent === "string"
+        ? normalizeCommitIntent(this.request.intent)
         : this.request.intent;
-      if (explicitOrSessionIntent === undefined && classifyFormattingOnly(staged.files, staged.compactPatch).formattingOnly) {
-        await this.commitDeterministicFormatting(staged);
+      const formattingOnly = explicitIntent === undefined
+        ? formattingOnlyMessage(staged.files, staged.compactPatch)
+        : undefined;
+      if (formattingOnly) {
+        await this.commitDeterministicFormatting(staged, formattingOnly.message, formattingOnly.subject);
         return;
       }
 
       this.throwIfCancelled();
       this.transition("drafting");
-      const generated = await this.completeMessage(staged, explicitOrSessionIntent);
+      const generated = await this.completeMessage(staged, explicitIntent);
       if (!generated.ok) throw new CommitMessageGenerationError(generated.code, generated.reason, generated.diagnostics?.usage);
 
       this.throwIfCancelled();
@@ -234,7 +229,7 @@ export class QuickCommitJob {
       const current = await this.request.git.maybeSnapshot();
       if (!snapshotsMatch(staged.snapshot, current)) {
         this.finish("stale");
-        this.notify("Quick commit: the branch, HEAD, or index changed. Nothing was committed.", "warning");
+        this.notify(`Quick commit: the branch, HEAD, or index changed. Nothing was committed.${formatUsageCostLine(this.diagnosticsValue?.usage)}`, "warning");
         return;
       }
 
@@ -257,7 +252,7 @@ export class QuickCommitJob {
       if (commitError) throw commitError;
 
       this.finish("succeeded");
-      this.notify(`${CHECK_ICON} Quick commit: complete\n  ${this.subject}${this.recoveredHint()}${this.usageHint()}`, "info");
+      this.notify(this.completionNotice(this.subject), "info");
     } catch (error: unknown) {
       this.fail(error);
     } finally {
@@ -286,15 +281,9 @@ export class QuickCommitJob {
   }
 
   /** Deterministic commit for whitespace-only churn; no model round trip. */
-  private async commitDeterministicFormatting(staged: StagedEvidence): Promise<void> {
+  private async commitDeterministicFormatting(staged: StagedEvidence, message: string, subject: string): Promise<void> {
     this.throwIfCancelled();
     this.transition("drafting");
-    const fileCount = staged.summary.fileCount;
-    const subject = fileCount === 1
-      ? `style: format ${staged.files[0]?.path ?? "file"}`
-      : `style: format ${fileCount} files`;
-    const message = `${subject}\n\nWhitespace-only changes detected by pi-git; generated without a model call.`;
-
     this.subject = subject;
     this.finalizationStarted = true;
     this.transition("finalizing");
@@ -320,7 +309,7 @@ export class QuickCommitJob {
     }
 
     this.finish("succeeded");
-    this.notify(`${CHECK_ICON} Quick commit: complete\n  ${subject}`, "info");
+    this.notify(this.completionNotice(subject), "info");
   }
 
   /** Mention a message that was recovered from a reply the provider cut off. */
@@ -330,10 +319,9 @@ export class QuickCommitJob {
       : "";
   }
 
-  /** These tokens are outside the pi session, so report them where they were spent. */
-  private usageHint(): string {
-    const usage = this.diagnosticsValue?.usage;
-    return usage && usage.calls > 0 ? `\n  ${formatTokenTally(usage, { showCalls: true })}` : "";
+  /** One completion shape for every quick commit, model-generated or deterministic. */
+  private completionNotice(subject: string): string {
+    return `${CHECK_ICON} Quick commit: complete\n  ${subject}${this.recoveredHint()}${formatUsageCostLine(this.diagnosticsValue?.usage)}`;
   }
 
   private transition(next: QuickCommitState): void {
@@ -398,7 +386,7 @@ export class QuickCommitJob {
 
     this.stateValue = "failed";
     const spent = error instanceof CommitMessageGenerationError ? error.usage : undefined;
-    this.notify(`${formatFailure(error)}${spent && spent.calls > 0 ? `\n  ${formatTokenTally(spent, { showCalls: true })}` : ""}`, "error");
+    this.notify(`${formatFailure(error)}${formatUsageCostLine(spent)}`, "error");
     this.resolveIfNeeded();
   }
 
