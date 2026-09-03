@@ -12,11 +12,9 @@ import {
 import { ShortcutSettingsDialog, type SettingsDialogResult } from "./settings-dialog.js";
 import { openBranchManager, openGitStatus } from "./git-ui.js";
 import { runAmendCommit, runManualCommit, SmartCommitSession } from "./commit-workflow.js";
-import { registerStatusline } from "../statusline.js";
 
 export function registerPiGit(pi: ExtensionAPI): void {
   const shortcutLoad = loadShortcutConfig();
-  const statusline = registerStatusline(pi, shortcutLoad.config.customFooter);
   const quickCommits = new QuickCommitController();
   const smartCommit = new SmartCommitSession();
   let alive = true;
@@ -37,10 +35,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
   const makeUi = (ctx: ExtensionContext): QuickCommitUi => ({
     isAlive: () => alive && ctx.mode === "tui",
     notify: (message, level) => ctx.ui.notify(message, level),
-    setStatus: (key, text) => {
-      ctx.ui.setStatus(key, text);
-      statusline.requestRender();
-    },
+    setStatus: (key, text) => ctx.ui.setStatus(key, text),
   });
 
   const requireTui = (ctx: ExtensionContext): boolean => {
@@ -120,7 +115,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("git-settings", {
-    description: "Configure pi-git's shortcuts and custom footer",
+    description: "Configure pi-git's global shortcuts",
     handler: async (_args, ctx) => {
       if (!requireTui(ctx)) return;
       await openSettings(ctx, quickCommits, shortcutConfig, makeUi(ctx));

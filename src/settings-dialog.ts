@@ -10,7 +10,6 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import {
-  DEFAULT_CUSTOM_FOOTER,
   DEFAULT_SHORTCUTS,
   parseShortcut,
   type ShortcutAction,
@@ -22,20 +21,15 @@ export type SettingsDialogResult =
   | { readonly action: "cancel" }
   | { readonly action: "save"; readonly config: ShortcutConfig };
 
-type SettingId = ShortcutAction | "customFooter";
-
 const ACTIONS: ShortcutAction[] = ["openStatus", "quickCommit"];
-const SETTINGS: SettingId[] = [...ACTIONS, "customFooter"];
-const LABELS: Record<SettingId, string> = {
+const LABELS: Record<ShortcutAction, string> = {
   openStatus: "Open Git status",
   quickCommit: "Quick commit",
-  customFooter: "Custom footer",
 };
 
 export class ShortcutSettingsDialog implements Component, Focusable {
   private readonly input = new Input();
   private readonly values: Record<ShortcutAction, string>;
-  private customFooter: boolean;
   private selected = 0;
   private editing = false;
   private focusedValue = false;
@@ -52,7 +46,6 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       openStatus: initial.shortcuts.openStatus ?? "none",
       quickCommit: initial.shortcuts.quickCommit ?? "none",
     };
-    this.customFooter = initial.customFooter;
   }
 
   get focused(): boolean {
@@ -89,26 +82,19 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       return;
     }
     if (matchesKey(data, Key.up) || data === "k") {
-      this.selected = (this.selected - 1 + SETTINGS.length) % SETTINGS.length;
+      this.selected = (this.selected - 1 + ACTIONS.length) % ACTIONS.length;
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.down) || data === "j") {
-      this.selected = (this.selected + 1) % SETTINGS.length;
+      this.selected = (this.selected + 1) % ACTIONS.length;
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.enter)) {
-      const setting = SETTINGS[this.selected];
-      if (setting === "customFooter") {
-        this.customFooter = !this.customFooter;
-        this.invalidate();
-        this.tui.requestRender();
-      } else {
-        this.startEditing();
-      }
+      this.startEditing();
       return;
     }
     if (matchesKey(data, Key.ctrl("s"))) {
@@ -116,19 +102,14 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       return;
     }
     if (data === "r") {
-      const setting = SETTINGS[this.selected];
-      if (setting === "customFooter") {
-        this.customFooter = DEFAULT_CUSTOM_FOOTER;
-      } else if (setting) {
-        this.values[setting] = DEFAULT_SHORTCUTS[setting];
-      }
+      const setting = ACTIONS[this.selected];
+      if (setting) this.values[setting] = DEFAULT_SHORTCUTS[setting];
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.shift("r"))) {
       for (const action of ACTIONS) this.values[action] = DEFAULT_SHORTCUTS[action];
-      this.customFooter = DEFAULT_CUSTOM_FOOTER;
       this.invalidate();
       this.tui.requestRender();
     }
@@ -145,7 +126,7 @@ export class ShortcutSettingsDialog implements Component, Focusable {
     const lines: string[] = [
       ...renderText(""),
       ...renderText(this.theme.fg("accent", this.theme.bold("pi-git settings"))),
-      ...renderText(this.theme.fg("dim", "Configure global shortcuts and the optional footer. Changes apply after reload.")),
+      ...renderText(this.theme.fg("dim", "Configure pi-git's global shortcuts. Changes apply after reload.")),
       ...renderText(this.theme.fg("borderMuted", "─".repeat(contentWidth))),
     ];
     if (this.errorMessage) lines.push(...renderText(this.theme.fg("error", ` ${this.errorMessage}`)));
@@ -157,17 +138,15 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       lines.push(...this.input.render(contentWidth).map((line) => renderLine(line)));
       lines.push(...renderText(this.theme.fg("dim", " enter accept • esc cancel")));
     } else {
-      for (let index = 0; index < SETTINGS.length; index += 1) {
-        const setting = SETTINGS[index];
+      for (let index = 0; index < ACTIONS.length; index += 1) {
+        const setting = ACTIONS[index];
         if (!setting) continue;
         const marker = index === this.selected ? this.theme.fg("accent", "→ ") : "  ";
-        const value = setting === "customFooter"
-          ? this.customFooter ? "enabled" : "disabled"
-          : this.values[setting] || "none";
+        const value = this.values[setting] || "none";
         lines.push(...renderText(`${marker}${LABELS[setting]}: ${value}`));
       }
       lines.push(...renderText(this.theme.fg("borderMuted", "─".repeat(contentWidth))));
-      lines.push(...renderText(this.theme.fg("dim", " ↑↓ select • enter edit/toggle • ctrl+s save • r reset selected • shift+r reset all • esc cancel")));
+      lines.push(...renderText(this.theme.fg("dim", " ↑↓ select • enter edit • ctrl+s save • r reset selected • shift+r reset all • esc cancel")));
     }
     lines.push(...renderText(""));
     return lines;
@@ -182,8 +161,8 @@ export class ShortcutSettingsDialog implements Component, Focusable {
   }
 
   private startEditing(): void {
-    const action = SETTINGS[this.selected];
-    if (!action || action === "customFooter") return;
+    const action = ACTIONS[this.selected];
+    if (!action) return;
     this.editing = true;
     this.input.setValue(this.values[action]);
     this.input.focused = this.focusedValue;
@@ -217,7 +196,6 @@ export class ShortcutSettingsDialog implements Component, Focusable {
     const config: ShortcutConfig = {
       version: 1,
       shortcuts: { openStatus: openStatus.value, quickCommit: quickCommit.value },
-      customFooter: this.customFooter,
     };
     const diagnostics = validateShortcutConfig(config);
     if (diagnostics.errors.length > 0) {

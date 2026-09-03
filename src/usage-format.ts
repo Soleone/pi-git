@@ -53,9 +53,12 @@ export class TokenTallyCollector {
 }
 
 /**
- * Compact footer shape: `$0.00 ⚡19M ↑264k ↓86k`, where ⚡ is cache read and
+ * Compact session-status shape: `$0.00 ⚡19M ↑264k ↓86k`, where ⚡ is cache read and
  * an appended `+4k` is cache write. Trailing `· 2 calls` only appears when a
- * retry ladder spent more than one request.
+ * retry ladder spent more than one request. pi-statusline prints the same shape
+ * in its status line and keeps its own copy of compactTokenCount; change the
+ * shape in both places so commit notices and the status line stay legible
+ * together.
  */
 export function formatTokenTally(tally: TokenTally, options: { readonly showCalls?: boolean } = {}): string {
   if (tally.calls === 0) return "no model calls";

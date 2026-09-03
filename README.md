@@ -23,7 +23,7 @@ Every command uses the `/git*` namespace:
 | `/git-smart-commit` | Generate a reviewable commit draft and open the manual editor. |
 | `/git-quick-commit` | Stage all changes, generate a message, validate the snapshot, and commit in the background. |
 | `/git-quick-commit cancel` | Cancel an active quick-commit job before finalization. |
-| `/git-settings` | Configure pi-git's global shortcuts and custom footer. |
+| `/git-settings` | Configure pi-git's global shortcuts. |
 
 The old `/branch`, `/commit`, `/smartcommit`, and `/quickcommit` names are not registered.
 
@@ -44,9 +44,9 @@ The manual commit editor keeps these fixed shortcuts:
 | `Ctrl+R` | Rewrite the message. |
 | `Ctrl+G` | Run Graphite create-and-commit. |
 
-Use `/git-settings` to change or disable the two global bindings and to enable or disable pi-git's custom footer. Accepted shortcut values include `ctrl+shift+g`, `alt+g`, `escape`, `delete`, `none`, and an empty value. Select **Custom footer** and press Enter to toggle it. The footer is disabled by default.
+Use `/git-settings` to change or disable the two global bindings. Accepted shortcut values include `ctrl+shift+g`, `alt+g`, `escape`, `delete`, `none`, and an empty value.
 
-Settings are stored atomically at `$PI_CODING_AGENT_DIR/pi-git.json`, falling back to `~/.pi/agent/pi-git.json`. A reload is required and is performed automatically after saving. The equivalent file setting is `"customFooter": false`:
+Settings are stored atomically at `$PI_CODING_AGENT_DIR/pi-git.json`, falling back to `~/.pi/agent/pi-git.json`. A reload is required and is performed automatically after saving:
 
 ```json
 {
@@ -54,10 +54,11 @@ Settings are stored atomically at `$PI_CODING_AGENT_DIR/pi-git.json`, falling ba
   "shortcuts": {
     "openStatus": "ctrl+\\",
     "quickCommit": "alt+g"
-  },
-  "customFooter": false
+  }
 }
 ```
+
+A `customFooter` key left over from earlier versions is ignored and dropped on the next save; the session status line now lives in [pi-statusline](../pi-statusline).
 
 ## Quick commit safety
 
@@ -67,7 +68,7 @@ Quick commit uses one extension-session job with these phases:
 staging -> drafting -> validating -> finalizing -> committing -> succeeded
 ```
 
-Cancellation works during staging, drafting, and validation. Once finalization starts, cancellation is rejected so a running Git commit and its hooks are not interrupted. Quick commit immediately reports `Quick commit: committing...`, then reports `Quick commit: complete` with the commit title, with progress notifications between phases (evidence capture, reduction of oversized diffs). When enabled in settings, pi-git's custom footer only renders repository and session statistics.
+Cancellation works during staging, drafting, and validation. Once finalization starts, cancellation is rejected so a running Git commit and its hooks are not interrupted. Quick commit immediately reports `Quick commit: committing...`, then reports `Quick commit: complete` with the commit title, with progress notifications between phases (evidence capture, reduction of oversized diffs).
 
 Two latency guards keep commits fast: pure reformatting diffs - where every file's identifier/number token sequence is unchanged by the edit - are committed deterministically (`style: format N files`) without any model call, and commit generation caps reasoning effort at `low` regardless of the session thinking level, since commit messages do not benefit from extended reasoning.
 
@@ -88,7 +89,7 @@ A `length` stop is recovered, never fatal. pi-git keeps every line the model act
 
 When the complete compact patch exceeds the 512 KiB cap, pi-git degrades explicitly instead of failing: a skeleton projection keeps every file header and hunk header (preserving function-level context), grants full change bodies to small high-signal files, and replaces the bodies of lockfile, vendor, and generated paths with one inline `@@ pi-git: change bodies omitted (+added -deleted across N hunks) @@` marker per file. The prompt section is labeled `<partial-staged-patch>` and enumerates every omitted file, and the model is instructed not to claim details about omitted bodies. The staged manifest and statistics always remain complete and authoritative. Evidence is never silently truncated: every reduction is enumerated in the prompt itself.
 
-Commit drafts report what they cost. These model calls happen outside the pi session, so they never appear in the session footer, and a large diff is a real 100k-plus-token request. Both commit paths render the same line on the notice that ends the run: quick commit on `Quick commit: complete`, smart commit when the draft is ready and again on `Committed`, where it also totals any `ctrl+r` rewrites. Notices that throw work away say so too - a stale snapshot, a discarded draft, a Graphite commit, and any failure after a model was called all carry what was spent. A pure reformat is committed without a model call, so it shows no cost line. The shape is the one you already read in the footer: `$0.42 ⚡19M ↑264k ↓86k`, where `⚡` is cache read (`/+4k` appended when a call wrote cache), `↑` is input, and `↓` is output. A `· 2 calls` suffix means a recovery ladder or a route change spent more than one request, and the totals cover all of them, including the analyst phase.
+Commit drafts report what they cost. These model calls happen outside the pi session, so they never appear in the session footer, and a large diff is a real 100k-plus-token request. Both commit paths render the same line on the notice that ends the run: quick commit on `Quick commit: complete`, smart commit when the draft is ready and again on `Committed`, where it also totals any `ctrl+r` rewrites. Notices that throw work away say so too - a stale snapshot, a discarded draft, a Graphite commit, and any failure after a model was called all carry what was spent. A pure reformat is committed without a model call, so it shows no cost line. The shape matches the one [pi-statusline](../pi-statusline) prints: `$0.42 ⚡19M ↑264k ↓86k`, where `⚡` is cache read (`/+4k` appended when a call wrote cache), `↑` is input, and `↓` is output. A `· 2 calls` suffix means a recovery ladder or a route change spent more than one request, and the totals cover all of them, including the analyst phase.
 
 Before committing, pi-git compares the captured branch ref, `HEAD`, and index tree with a fresh snapshot. If one changed, the job reports a stale snapshot and leaves the current index intact.
 
@@ -127,7 +128,6 @@ The test suite covers NUL-delimited Git status parsing, temporary repositories, 
 
 ```text
 index.ts
-statusline.ts
 src/
   register.ts
   git-service.ts

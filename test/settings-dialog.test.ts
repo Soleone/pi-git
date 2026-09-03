@@ -12,11 +12,10 @@ const theme = {
 const config: ShortcutConfig = {
   version: 1,
   shortcuts: { openStatus: "ctrl+\\", quickCommit: "alt+g" },
-  customFooter: true,
 };
 
 describe("ShortcutSettingsDialog", () => {
-  it("toggles and saves the custom footer setting", () => {
+  it("saves the configured shortcuts and offers no footer toggle", () => {
     let result: SettingsDialogResult | undefined;
     const tui = { requestRender: () => {} } as TUI;
     const dialog = new ShortcutSettingsDialog(tui, theme, config, (value) => {
@@ -27,14 +26,25 @@ describe("ShortcutSettingsDialog", () => {
     expect(initialLines[0]).toBe("  ");
     expect(initialLines[1]).toBe(" pi-git settings ");
     expect(initialLines.at(-1)).toBe("  ");
-    expect(initialLines.join("\n")).toContain("Custom footer: enabled");
-    dialog.handleInput("\x1b[B");
-    dialog.handleInput("\x1b[B");
-    dialog.handleInput("\r");
-    expect(dialog.render(100).join("\n")).toContain("Custom footer: disabled");
-    dialog.handleInput("\x13");
+    const rendered = initialLines.join("\n");
+    expect(rendered).toContain("Open Git status: ctrl+\\");
+    expect(rendered).toContain("Quick commit: alt+g");
+    // The custom footer moved to pi-statusline; nothing here may re-add it.
+    expect(rendered.toLowerCase()).not.toContain("footer");
 
-    expect(result).toMatchObject({ action: "save", config: { customFooter: false } });
+    dialog.handleInput("\x13");
+    expect(result).toMatchObject({ action: "save", config: { shortcuts: { openStatus: "ctrl+\\" } } });
+  });
+
+  it("moves the selection with the arrow keys", () => {
+    const tui = { requestRender: () => {} } as TUI;
+    const dialog = new ShortcutSettingsDialog(tui, theme, config, () => {});
+
+    expect(dialog.render(100).join("\n")).toContain("→ Open Git status");
+    dialog.handleInput("\x1b[B");
+    expect(dialog.render(100).join("\n")).toContain("→ Quick commit");
+    dialog.handleInput("\x1b[B");
+    expect(dialog.render(100).join("\n")).toContain("→ Open Git status");
   });
 
   it("wraps long content instead of truncating it", () => {
@@ -44,7 +54,8 @@ describe("ShortcutSettingsDialog", () => {
     const rendered = lines.join("\n");
 
     expect(rendered).toContain("reload.");
-    expect(rendered).toContain("shift+r reset all • esc cancel");
+    expect(rendered).toContain("shift+r reset all");
+    expect(rendered).toContain("esc cancel");
     expect(rendered).not.toContain("...");
     expect(lines.every((line) => line.length <= 40)).toBe(true);
   });

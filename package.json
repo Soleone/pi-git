@@ -33,7 +33,6 @@
   },
   "files": [
     "index.ts",
-    "statusline.ts",
     "src",
     "COMMIT.md",
     "README.md"
