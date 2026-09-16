@@ -50,7 +50,7 @@ export function patchBodiesByPath(patch: string): Map<string, BodyLines> {
       if (line.startsWith("+++ ")) {
         let candidate = line.slice(4).trim();
         if (candidate.startsWith('"') && candidate.endsWith('"')) candidate = candidate.slice(1, -1);
-        currentPath = candidate === "/dev/null" ? "" : candidate.startsWith("b/") ? candidate.slice(2) : candidate;
+        currentPath = candidate === "/dev/null" ? "" : /^(?:a|b|c|i)\//.test(candidate) ? candidate.slice(2) : candidate;
       }
       continue;
     }

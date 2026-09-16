@@ -469,7 +469,7 @@ export class GitService {
     execOptions: GitExecOptions = {},
   ): Promise<string> {
     const result = await this.execGit(
-      ["diff", "--cached", "--no-ext-diff", "--no-color", "--find-renames", "--find-copies", ...extraArgs, "--", "."],
+      ["diff", "--cached", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--find-renames", "--find-copies", ...extraArgs, "--", "."],
       "read staged diff",
       { signal, ...execOptions },
     );

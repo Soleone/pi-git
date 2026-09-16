@@ -49,7 +49,7 @@ function parseBSidePath(headerLines: readonly string[]): string {
     let candidate = line.slice(4).trim();
     if (candidate.startsWith('"') && candidate.endsWith('"')) candidate = candidate.slice(1, -1);
     if (candidate === "/dev/null") return "";
-    return candidate.startsWith("b/") ? candidate.slice(2) : candidate;
+    return /^(?:a|b|c|i)\//.test(candidate) ? candidate.slice(2) : candidate;
   }
   return "";
 }
