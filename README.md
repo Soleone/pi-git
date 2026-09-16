@@ -23,7 +23,7 @@ Every command uses the `/git*` namespace:
 | `/git-smart-commit` | Generate a reviewable commit draft and open the manual editor. |
 | `/git-quick-commit` | Stage all changes, generate a message, validate the snapshot, and commit in the background. |
 | `/git-quick-commit cancel` | Cancel an active quick-commit job before finalization. |
-| `/git-settings` | Configure pi-git's global shortcuts. |
+| `/git-settings` | Configure pi-git's global shortcuts and commit message model. |
 
 The old `/branch`, `/commit`, `/smartcommit`, and `/quickcommit` names are not registered.
 
@@ -44,7 +44,7 @@ The manual commit editor keeps these fixed shortcuts:
 | `Ctrl+R` | Rewrite the message. |
 | `Ctrl+G` | Run Graphite create-and-commit. |
 
-Use `/git-settings` to change or disable the two global bindings. Accepted shortcut values include `ctrl+shift+g`, `alt+g`, `escape`, `delete`, `none`, and an empty value.
+Use `/git-settings` to change or disable the two global bindings and choose the model used by smart and quick commit. The model defaults to `current`; press `m` in the settings dialogue to edit it. Scoped models from `/scoped-models` are shown as suggestions, while any available `provider/model-id` can be entered.
 
 Settings are stored atomically at `$PI_CODING_AGENT_DIR/pi-git.json`, falling back to `~/.pi/agent/pi-git.json`. A reload is required and is performed automatically after saving:
 
@@ -54,7 +54,8 @@ Settings are stored atomically at `$PI_CODING_AGENT_DIR/pi-git.json`, falling ba
   "shortcuts": {
     "openStatus": "ctrl+\\",
     "quickCommit": "alt+g"
-  }
+  },
+  "commitModel": "current"
 }
 ```
 

@@ -8,12 +8,16 @@ export const DEFAULT_SHORTCUTS = {
   quickCommit: "alt+g",
 } as const;
 
+export const DEFAULT_COMMIT_MODEL = "current";
+
 export type ShortcutAction = keyof typeof DEFAULT_SHORTCUTS;
 export type ShortcutValue = KeyId | undefined;
 
 export interface ShortcutConfig {
   readonly version: 1;
   readonly shortcuts: Readonly<Record<ShortcutAction, ShortcutValue>>;
+  /** Model ref used for smart and quick commit generation, or `current`. */
+  readonly commitModel?: string;
 }
 
 export interface ShortcutDiagnostics {
@@ -121,6 +125,11 @@ export function parseShortcutConfig(raw: unknown): {
   }
 
   const rawShortcuts = isRecord(value.shortcuts) ? value.shortcuts : {};
+  const rawCommitModel = value.commitModel;
+  const commitModel = rawCommitModel === undefined ? DEFAULT_COMMIT_MODEL : rawCommitModel;
+  if (typeof commitModel !== "string" || commitModel.trim() === "") {
+    errors.push("commitModel must be a non-empty model reference or current.");
+  }
   if (value.shortcuts !== undefined && !isRecord(value.shortcuts)) {
     errors.push("The shortcuts field must be an object.");
   }
@@ -163,6 +172,7 @@ export function parseShortcutConfig(raw: unknown): {
     config: {
       version: 1,
       shortcuts,
+      commitModel: typeof commitModel === "string" && commitModel.trim() ? commitModel.trim() : DEFAULT_COMMIT_MODEL,
     },
     diagnostics: { warnings, errors, duplicates },
   };
@@ -217,6 +227,7 @@ export function validateShortcutConfig(config: ShortcutConfig): ShortcutDiagnost
       openStatus: config.shortcuts.openStatus ?? "none",
       quickCommit: config.shortcuts.quickCommit ?? "none",
     },
+    commitModel: config.commitModel ?? DEFAULT_COMMIT_MODEL,
   }).diagnostics;
 }
 
@@ -240,6 +251,7 @@ export function writeShortcutConfig(
       openStatus: config.shortcuts.openStatus ?? "none",
       quickCommit: config.shortcuts.quickCommit ?? "none",
     },
+    commitModel: config.commitModel ?? DEFAULT_COMMIT_MODEL,
   };
 
   let descriptor: number | undefined;

@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { GitExecutor } from "./git-service.js";
 import { GitService } from "./git-service.js";
 import { loadCommitStyle } from "./commit-message.js";
@@ -60,7 +61,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
     quickCommits.start({
       git: makeGit(ctx),
       modelRegistry: ctx.modelRegistry,
-      model: ctx.model,
+      model: resolveCommitModel(ctx, shortcutConfig.commitModel),
       commitStyle: loadCommitStyle(ctx.cwd),
       ...(ctx.thinkingLevel === undefined ? {} : { thinkingLevel: ctx.thinkingLevel }),
       ui,
@@ -103,7 +104,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
     description: "Generate a reviewable Git commit draft",
     handler: async (_args, ctx) => {
       if (!requireTui(ctx)) return;
-      await smartCommit.run(pi, ctx, makeGit(ctx), loadCommitStyle(ctx.cwd));
+      await smartCommit.run(pi, ctx, makeGit(ctx), loadCommitStyle(ctx.cwd), resolveCommitModel(ctx, shortcutConfig.commitModel));
     },
   });
 
@@ -115,7 +116,7 @@ export function registerPiGit(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("git-settings", {
-    description: "Configure pi-git's global shortcuts",
+    description: "Configure pi-git's shortcuts and commit model",
     handler: async (_args, ctx) => {
       if (!requireTui(ctx)) return;
       await openSettings(ctx, quickCommits, shortcutConfig, makeUi(ctx));
@@ -146,7 +147,13 @@ async function openSettings(
   ui: QuickCommitUi,
 ): Promise<void> {
   const result = await ctx.ui.custom<SettingsDialogResult | undefined>(
-    (tui, theme, _keybindings, done) => new ShortcutSettingsDialog(tui, theme, currentConfig, done),
+    (tui, theme, _keybindings, done) => new ShortcutSettingsDialog(
+      tui,
+      theme,
+      currentConfig,
+      done,
+      modelOptions(ctx),
+    ),
     { overlay: true },
   );
   if (!result || result.action === "cancel") return;
@@ -161,6 +168,31 @@ async function openSettings(
     return;
   }
   await ctx.reload();
+}
+
+function modelOptions(ctx: ExtensionCommandContext): string[] {
+  const models = ctx.scopedModels.length > 0
+    ? ctx.scopedModels.map((entry) => entry.model)
+    : ctx.modelRegistry.getAvailable();
+  return models
+    .map((model) => `${model.provider}/${model.id}`)
+    .filter((value, index, all) => all.indexOf(value) === index)
+    .sort();
+}
+
+function resolveCommitModel(ctx: ExtensionContext, configured: string | undefined): Model<Api> | undefined {
+  if (!configured || configured.trim().toLowerCase() === "current") return ctx.model as Model<Api> | undefined;
+  const separator = configured.indexOf("/");
+  if (separator <= 0 || separator === configured.length - 1) {
+    ctx.ui.notify(`Configured pi-git model is invalid: ${configured}`, "warning");
+    return undefined;
+  }
+  const model = ctx.modelRegistry.find(configured.slice(0, separator), configured.slice(separator + 1));
+  if (!model) {
+    ctx.ui.notify(`Configured pi-git model is not available: ${configured}`, "warning");
+    return undefined;
+  }
+  return model as Model<Api>;
 }
 
 function registerGlobalShortcuts(

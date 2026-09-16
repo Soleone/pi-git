@@ -14,6 +14,7 @@ import {
   parseShortcut,
   type ShortcutAction,
   type ShortcutConfig,
+  DEFAULT_COMMIT_MODEL,
   validateShortcutConfig,
 } from "./shortcut-config.js";
 
@@ -30,6 +31,8 @@ const LABELS: Record<ShortcutAction, string> = {
 export class ShortcutSettingsDialog implements Component, Focusable {
   private readonly input = new Input();
   private readonly values: Record<ShortcutAction, string>;
+  private commitModel: string;
+  private readonly modelOptions: readonly string[];
   private selected = 0;
   private editing = false;
   private focusedValue = false;
@@ -41,11 +44,14 @@ export class ShortcutSettingsDialog implements Component, Focusable {
     private readonly theme: Theme,
     initial: ShortcutConfig,
     private readonly done: (result: SettingsDialogResult) => void,
+    modelOptions: readonly string[] = [],
   ) {
     this.values = {
       openStatus: initial.shortcuts.openStatus ?? "none",
       quickCommit: initial.shortcuts.quickCommit ?? "none",
     };
+    this.commitModel = initial.commitModel ?? DEFAULT_COMMIT_MODEL;
+    this.modelOptions = modelOptions;
   }
 
   get focused(): boolean {
@@ -69,6 +75,15 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       }
       if (matchesKey(data, Key.enter)) {
         this.finishEditing();
+        return;
+      }
+      if (this.selected === ACTIONS.length && this.modelOptions.length > 0 && (matchesKey(data, Key.up) || matchesKey(data, Key.down))) {
+        const direction = matchesKey(data, Key.up) ? -1 : 1;
+        const index = this.modelOptions.indexOf(this.input.getValue());
+        const next = this.modelOptions[(index + direction + this.modelOptions.length) % this.modelOptions.length];
+        if (next) this.input.setValue(next);
+        this.invalidate();
+        this.tui.requestRender();
         return;
       }
       this.input.handleInput(data);
@@ -97,6 +112,11 @@ export class ShortcutSettingsDialog implements Component, Focusable {
       this.startEditing();
       return;
     }
+    if (data.toLowerCase() === "m") {
+      this.selected = ACTIONS.length;
+      this.startEditing();
+      return;
+    }
     if (matchesKey(data, Key.ctrl("s"))) {
       this.save();
       return;
@@ -104,12 +124,14 @@ export class ShortcutSettingsDialog implements Component, Focusable {
     if (data === "r") {
       const setting = ACTIONS[this.selected];
       if (setting) this.values[setting] = DEFAULT_SHORTCUTS[setting];
+      else if (this.selected === ACTIONS.length) this.commitModel = DEFAULT_COMMIT_MODEL;
       this.invalidate();
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.shift("r"))) {
       for (const action of ACTIONS) this.values[action] = DEFAULT_SHORTCUTS[action];
+      this.commitModel = DEFAULT_COMMIT_MODEL;
       this.invalidate();
       this.tui.requestRender();
     }
@@ -132,8 +154,9 @@ export class ShortcutSettingsDialog implements Component, Focusable {
     if (this.errorMessage) lines.push(...renderText(this.theme.fg("error", ` ${this.errorMessage}`)));
 
     if (this.editing) {
-      const action = ACTIONS[this.selected] ?? "openStatus";
-      lines.push(...renderText(this.theme.fg("accent", ` Editing ${LABELS[action]}`)));
+      const action = ACTIONS[this.selected];
+      const label = action ? LABELS[action] : "Commit message model";
+      lines.push(...renderText(this.theme.fg("accent", ` Editing ${label}`)));
       this.input.focused = this.focusedValue;
       lines.push(...this.input.render(contentWidth).map((line) => renderLine(line)));
       lines.push(...renderText(this.theme.fg("dim", " enter accept • esc cancel")));
@@ -145,8 +168,12 @@ export class ShortcutSettingsDialog implements Component, Focusable {
         const value = this.values[setting] || "none";
         lines.push(...renderText(`${marker}${LABELS[setting]}: ${value}`));
       }
+      lines.push(...renderText(`  Commit message model: ${this.commitModel}`));
+      if (this.modelOptions.length > 0) {
+        lines.push(...renderText(this.theme.fg("dim", `  available: ${this.modelOptions.join(", ")}`)));
+      }
       lines.push(...renderText(this.theme.fg("borderMuted", "─".repeat(contentWidth))));
-      lines.push(...renderText(this.theme.fg("dim", " ↑↓ select • enter edit • ctrl+s save • r reset selected • shift+r reset all • esc cancel")));
+      lines.push(...renderText(this.theme.fg("dim", " ↑↓ select • enter edit • m edit model • ctrl+s save • r reset selected • shift+r reset all • esc cancel")));
     }
     lines.push(...renderText(""));
     return lines;
@@ -162,9 +189,8 @@ export class ShortcutSettingsDialog implements Component, Focusable {
 
   private startEditing(): void {
     const action = ACTIONS[this.selected];
-    if (!action) return;
     this.editing = true;
-    this.input.setValue(this.values[action]);
+    this.input.setValue(action ? this.values[action] : this.commitModel);
     this.input.focused = this.focusedValue;
     this.invalidate();
     this.tui.requestRender();
@@ -172,7 +198,19 @@ export class ShortcutSettingsDialog implements Component, Focusable {
 
   private finishEditing(): void {
     const action = ACTIONS[this.selected];
-    if (!action) return;
+    if (!action) {
+      const value = this.input.getValue().trim();
+      if (!value) {
+        this.showError("Model reference must not be empty.");
+        return;
+      }
+      this.commitModel = value;
+      this.editing = false;
+      this.input.setValue("");
+      this.invalidate();
+      this.tui.requestRender();
+      return;
+    }
     const parsed = parseShortcut(this.input.getValue());
     if (!parsed.ok) {
       this.showError(parsed.error);
@@ -196,6 +234,7 @@ export class ShortcutSettingsDialog implements Component, Focusable {
     const config: ShortcutConfig = {
       version: 1,
       shortcuts: { openStatus: openStatus.value, quickCommit: quickCommit.value },
+      commitModel: this.commitModel,
     };
     const diagnostics = validateShortcutConfig(config);
     if (diagnostics.errors.length > 0) {

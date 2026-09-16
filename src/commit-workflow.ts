@@ -26,6 +26,8 @@ export interface ManualCommitOptions {
   readonly onEditorReady?: () => void;
   /** Bills every model call this flow makes, rewrites included, so the notice can show the cost. */
   readonly usage?: TokenTallyCollector;
+  /** Model used when rewriting a smart-commit draft. */
+  readonly model?: Model<Api>;
 }
 
 export async function runManualCommit(
@@ -34,7 +36,7 @@ export async function runManualCommit(
   git: GitService,
   options: ManualCommitOptions = {},
 ): Promise<boolean> {
-  const { message: directMessage, prefill = "", expectedSnapshot, onMessageChange, onEditorReady, usage } = options;
+  const { message: directMessage, prefill = "", expectedSnapshot, onMessageChange, onEditorReady, usage, model } = options;
   let staged: StagedEvidence;
   try {
     staged = await captureStagedEvidence(git);
@@ -82,6 +84,7 @@ export async function runManualCommit(
         loadCommitStyle(ctx.cwd),
         staged.snapshot,
         message,
+        model ?? ctx.model as Model<Api> | undefined,
       );
       if (rewritten?.ok) {
         message = rewritten.message;
@@ -201,7 +204,13 @@ interface SmartDraft {
 export class SmartCommitSession {
   private draft: SmartDraft | undefined;
 
-  async run(pi: ExtensionAPI, ctx: ExtensionContext, git: GitService, commitStyle: string): Promise<"committed" | "cancelled" | "started"> {
+  async run(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    git: GitService,
+    commitStyle: string,
+    selectedModel?: Model<Api>,
+  ): Promise<"committed" | "cancelled" | "started"> {
     ctx.ui.notify("Smart commit: started, generating draft...", "info");
     let staged: StagedEvidence;
     try {
@@ -215,7 +224,7 @@ export class SmartCommitSession {
       return "cancelled";
     }
 
-    const model = ctx.model as Model<Api> | undefined;
+    const model = selectedModel ?? ctx.model as Model<Api> | undefined;
     if (!model) {
       ctx.ui.notify("No model selected. Select a model before generating a commit draft.", "error");
       return "cancelled";
@@ -248,6 +257,7 @@ export class SmartCommitSession {
         },
         onEditorReady: () => notifySmartDraftReady(ctx, draft),
         usage,
+        model,
       });
       if (committed) {
         this.draft = undefined;
@@ -320,8 +330,10 @@ async function rewriteMessage(
   style: string,
   expectedSnapshot: GitMaybeSnapshot,
   currentMessage: string,
+  selectedModel?: Model<Api>,
 ): Promise<Extract<CommitGenerationResult, { ok: true }> | undefined> {
-  if (!ctx.model) {
+  const model = selectedModel ?? ctx.model as Model<Api> | undefined;
+  if (!model) {
     ctx.ui.notify("No model selected for rewriting.", "error");
     return undefined;
   }
@@ -341,7 +353,7 @@ async function rewriteMessage(
   }
 
   const generated = await generateWithLoader(ctx, {
-    model: ctx.model as Model<Api>,
+    model,
     evidence,
     style,
     operation: { kind: "rewrite", currentMessage, instruction },
