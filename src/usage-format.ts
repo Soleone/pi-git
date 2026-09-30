@@ -53,7 +53,7 @@ export class TokenTallyCollector {
 }
 
 /**
- * Compact session-status shape: `$0.00 ⚡19M ↑264k ↓86k`, where ⚡ is cache read and
+ * Compact session-status shape: `$0.00 ⚡19.0M ↑264k ↓86k`, where ⚡ is cache read and
  * an appended `+4k` is cache write. Trailing `· 2 calls` only appears when a
  * retry ladder spent more than one request. pi-statusline prints the same shape
  * in its status line and keeps its own copy of compactTokenCount; change the
@@ -74,7 +74,7 @@ export function formatTokenTally(tally: TokenTally, options: { readonly showCall
 }
 
 export function compactTokenCount(value: number): string {
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   // Keep one decimal below 10k, where rounding to whole kilo would hide a third
   // of the spend on the small requests this extension makes.
   if (value >= 10_000) return `${Math.round(value / 1_000)}k`;

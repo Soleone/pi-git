@@ -19,7 +19,7 @@ describe("token tally", () => {
     const collector = new TokenTallyCollector();
     collector.add(usage({ input: 264_100, output: 86_400, cacheRead: 19_200_000, cost: { total: 0.42 } as Usage["cost"] }));
 
-    expect(formatTokenTally(collector.totals)).toBe("$0.42 ⚡19M ↑264k ↓86k");
+    expect(formatTokenTally(collector.totals)).toBe("$0.42 ⚡19.2M ↑264k ↓86k");
   });
 
   it("adds cache writes and counts only requests that reported usage", () => {
@@ -32,10 +32,11 @@ describe("token tally", () => {
     expect(formatTokenTally(new TokenTallyCollector().totals)).toBe("no model calls");
   });
 
-  it("compacts counts without a decimal for thousands", () => {
+  it("uses one decimal only for millions", () => {
     expect(compactTokenCount(999)).toBe("999");
     expect(compactTokenCount(1_000)).toBe("1k");
-    expect(compactTokenCount(1_499_999)).toBe("1M");
+    expect(compactTokenCount(1_499_999)).toBe("1.5M");
+    expect(compactTokenCount(19_000_000)).toBe("19.0M");
   });
 
   it("folds an earlier phase into the same bill", () => {
