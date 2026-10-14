@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Soleone/showcase/main/schema/showcase.schema.json",
+  "title": "pi-git",
+  "pitch": "Stage, write and commit from inside pi, while a quick commit runs in the background and you keep typing.",
+  "description": "A Git workflow for pi: a staging view with diffs, branches, a commit editor and model-written messages. Quick commit stages, drafts from the staged patch, checks nothing moved, and commits without taking over the editor.",
+  "kind": "agent-extension",
+  "stage": "product",
+  "year": 2026,
+  "tech": [
+    "TypeScript",
+    "pi",
+    "Git"
+  ],
+  "repo": "https://github.com/Soleone/pi-git",
+  "live": "https://pi-git.soleone.xyz",
+  "media": {
+    "hero": "demo/media/hero.png",
+    "motion": "demo/media/demo.webp",
+    "capture": "npm run media:capture"
+  },
+  "demo": {
+    "strategy": "browser-terminal",
+    "local": "npm run demo",
+    "externals": [
+      {
+        "name": "Model provider",
+        "type": "model",
+        "seam": "pi.registerProvider; the demo's extension registers a scripted provider (demo/browser/home/.pi/agent/extensions/demo-model.ts)",
+        "standIn": "simulated",
+        "note": "The model is scripted: it knows one edit and the commit message for it, and nothing is sent anywhere."
+      },
+      {
+        "name": "git CLI",
+        "type": "app",
+        "seam": "pi-git shells out to git; the demo puts a stand-in on PATH (demo/browser/git/git.mjs)",
+        "standIn": "simulated",
+        "note": "The browser sandbox has no git, so a stand-in built on isomorphic-git answers the commands pi-git calls. Other git commands aren't covered."
+      }
+    ]
+  }
+}

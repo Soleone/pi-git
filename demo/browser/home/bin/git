@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+// A stand-in for git (demo/browser/git/git.mjs), bundled by demo/browser/build.mjs and mounted at ~/.git-shim.
+require("../.git-shim/git.cjs").main(process.argv.slice(2)).then((code) => { process.exitCode = code; });

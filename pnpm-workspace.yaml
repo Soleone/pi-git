@@ -1,0 +1,4 @@
+# Declined install scripts: none is needed (esbuild ships its binary as a platform package),
+# and pnpm refuses to install while any is left undecided.
+allowBuilds:
+  esbuild: false

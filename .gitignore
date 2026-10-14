@@ -3,3 +3,6 @@ dist/
 coverage/
 *.tsbuildinfo
 artifacts/
+demo/browser/.build/
+# The demo sandbox's pi config (a global ignore often hides .pi/).
+!demo/browser/home/.pi/

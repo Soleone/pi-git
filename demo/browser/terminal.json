@@ -1,0 +1,50 @@
+{
+  "project": "../..",
+  "mount": {
+    ".": {
+      "from": "./home"
+    },
+    ".pi-app": {
+      "from": "./.build/pi-app"
+    },
+    ".git-shim": {
+      "from": "./.build/git"
+    },
+    ".pi/agent/extensions/pi-git": {
+      "from": "../..",
+      "include": [
+        "index.ts",
+        "src",
+        "package.json",
+        "COMMIT.md"
+      ]
+    }
+  },
+  "env": {
+    "PATH": "~/bin:/usr/local/bin:/usr/bin:/bin",
+    "PI_OFFLINE": "1"
+  },
+  "setup": [
+    "chmod +x bin/pi bin/git bin/fd bin/rg",
+    "node .demo/setup.js",
+    "npm install --no-audit --no-fund"
+  ],
+  "start": "cd project && pi",
+  "onTheme": "node .demo/pi-theme.js",
+  "welcome": [
+    "\u001b[1mpi-git\u001b[0m stages, writes and commits from inside pi, and a quick commit runs in the background while you keep typing.",
+    "This is real pi with the extension. The model is scripted, so it knows a few prompts and needs no key.",
+    "pi opens by itself in a small sample repository. Press the buttons above, in order:",
+    "",
+    "  add a --json flag     the agent edits a file and runs it",
+    "  /git                  the staging view: space stages a file, Esc closes it",
+    "  /git-quick-commit     stages everything, writes the message and commits",
+    "",
+    "Change the theme at the top right and pi follows it."
+  ],
+  "hints": [
+    "add a --json flag",
+    "/git",
+    "/git-quick-commit"
+  ]
+}
