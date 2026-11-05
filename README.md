@@ -106,7 +106,7 @@ pnpm validate
 
 The test suite covers NUL-delimited Git status parsing, temporary repositories, snapshot policy, strict model output validation, quick-commit cancellation and timeouts, temporary-file cleanup, and shortcut persistence.
 
-## Structure
+## Project structure
 
 ```text
 index.ts
