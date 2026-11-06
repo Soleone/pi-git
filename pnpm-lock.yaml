@@ -21,8 +21,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0
       '@soleone/showcase-terminal':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: ^0.2.0
+        version: 0.2.0
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
@@ -597,8 +597,8 @@ packages:
     resolution: {integrity: sha512-tOEzyR8/mHG8U/7Jlg+zLYfK2XkOyI7Fw4cJx44bzZTrtc4KwHjt487vB1U+bAIWJ6fjca2p8z4pvcPKg12EhQ==}
     engines: {node: '>=22'}
 
-  '@soleone/showcase-terminal@0.1.0':
-    resolution: {integrity: sha512-SdHmaHR7j7E2sLmbzJgrLJKPzJmDj3STtfQjsx3MJ8r5d98I+3RgpUneW/ZZEwpe8+gGVnfIqTDI6kOACUXG+Q==}
+  '@soleone/showcase-terminal@0.2.0':
+    resolution: {integrity: sha512-mTvyTA5eaDQEM0BeC6W/L0LO9J5SXkgrzzNm+IgypCGGkGlIdOc4qgvo4lPZjQmnTVuawueamc+W3oWpxp75Tg==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -1937,7 +1937,7 @@ snapshots:
 
   '@soleone/showcase-capture@0.1.0': {}
 
-  '@soleone/showcase-terminal@0.1.0': {}
+  '@soleone/showcase-terminal@0.2.0': {}
 
   '@standard-schema/spec@1.1.0': {}
 
