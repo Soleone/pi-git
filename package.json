@@ -30,7 +30,8 @@
     "@earendil-works/pi-ai": "0.84.2",
     "@earendil-works/pi-coding-agent": "0.84.2",
     "@earendil-works/pi-tui": "0.84.2",
-    "@soleone/showcase": "github:Soleone/showcase#658b1b5",
+    "@soleone/showcase-capture": "^0.1.0",
+    "@soleone/showcase-terminal": "^0.1.0",
     "@types/node": "24.12.4",
     "diff": "5.2.0",
     "esbuild": "0.25.10",
@@ -43,8 +44,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "validate": "npm pack --dry-run",
-    "demo:build": "node demo/browser/build.mjs && showcase terminal demo/browser --out dist/browser",
-    "demo": "node demo/browser/build.mjs && showcase terminal demo/browser --out dist/browser --serve",
+    "demo:build": "node demo/browser/build.mjs && showcase-terminal demo/browser --out dist/browser",
+    "demo": "node demo/browser/build.mjs && showcase-terminal demo/browser --out dist/browser --serve",
     "media:capture": "node demo/capture.mjs"
   },
   "files": [

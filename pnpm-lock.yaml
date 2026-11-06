@@ -17,9 +17,12 @@ importers:
       '@earendil-works/pi-tui':
         specifier: 0.84.2
         version: 0.84.2
-      '@soleone/showcase':
-        specifier: github:Soleone/showcase#658b1b5
-        version: https://codeload.github.com/Soleone/showcase/tar.gz/658b1b58f5f6f1530347c460283d30733f608460
+      '@soleone/showcase-capture':
+        specifier: ^0.1.0
+        version: 0.1.0
+      '@soleone/showcase-terminal':
+        specifier: ^0.1.0
+        version: 0.1.0
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
@@ -590,9 +593,12 @@ packages:
     resolution: {integrity: sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A==}
     engines: {node: '>=14.0.0'}
 
-  '@soleone/showcase@https://codeload.github.com/Soleone/showcase/tar.gz/658b1b58f5f6f1530347c460283d30733f608460':
-    resolution: {gitHosted: true, integrity: sha512-jENwyq8yTMv5u1FTzt4OK42gDl+MtxzDgKJM/N5MbQHa1P1BSE9yam91acY1k9Nb8mjBL1/FOFFhwBxqKBoepg==, tarball: https://codeload.github.com/Soleone/showcase/tar.gz/658b1b58f5f6f1530347c460283d30733f608460}
-    version: 0.2.0
+  '@soleone/showcase-capture@0.1.0':
+    resolution: {integrity: sha512-tOEzyR8/mHG8U/7Jlg+zLYfK2XkOyI7Fw4cJx44bzZTrtc4KwHjt487vB1U+bAIWJ6fjca2p8z4pvcPKg12EhQ==}
+    engines: {node: '>=22'}
+
+  '@soleone/showcase-terminal@0.1.0':
+    resolution: {integrity: sha512-SdHmaHR7j7E2sLmbzJgrLJKPzJmDj3STtfQjsx3MJ8r5d98I+3RgpUneW/ZZEwpe8+gGVnfIqTDI6kOACUXG+Q==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -1929,7 +1935,9 @@ snapshots:
       '@smithy/util-buffer-from': 2.2.0
       tslib: 2.8.1
 
-  '@soleone/showcase@https://codeload.github.com/Soleone/showcase/tar.gz/658b1b58f5f6f1530347c460283d30733f608460': {}
+  '@soleone/showcase-capture@0.1.0': {}
+
+  '@soleone/showcase-terminal@0.1.0': {}
 
   '@standard-schema/spec@1.1.0': {}
 
